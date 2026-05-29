@@ -1,0 +1,8 @@
+{
+  "name": "codeql-config-builder",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Copilot CLI canvas extension that provides a smart form-driven builder for CodeQL configuration YAML (gh.io/codeql-config), with preview, download, and commit-to-repo.",
+  "main": "extension.mjs"
+}
