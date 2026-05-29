@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CodeQL Config Builder</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">🔎</span>
+        <strong>CodeQL Config Builder</strong>
+      </div>
+      <div class="whoami" id="whoami">…</div>
+    </header>
+
+    <main>
+      <div class="card">
+        <p class="muted">
+          Builds a <code>codeql-config.yml</code> file. Reference:
+          <a href="https://gh.io/codeql-config" target="_blank" rel="noopener">gh.io/codeql-config</a>.
+        </p>
+
+        <form id="codeql-form" class="grid">
+          <label>
+            <span>name</span>
+            <input name="name" type="text" placeholder="My CodeQL config" />
+          </label>
+
+          <div class="actions-row">
+            <label class="row">
+              <input name="disable_default_queries" type="checkbox" />
+              <span>disable-default-queries</span>
+            </label>
+
+            <label class="grow">
+              <span>threat-model</span>
+              <select name="threat_model">
+                <option value="">(default — remote)</option>
+                <option value="remote">remote</option>
+                <option value="local">local</option>
+              </select>
+            </label>
+          </div>
+
+          <fieldset>
+            <legend>queries (additional query suites)</legend>
+            <div id="queries-list" class="list"></div>
+            <button type="button" class="add" data-add="queries">+ Add query suite</button>
+            <p class="hint">e.g. <code>security-extended</code>, <code>security-and-quality</code>, or a path like <code>./my-queries</code></p>
+          </fieldset>
+
+          <fieldset>
+            <legend>packs (CodeQL pack references)</legend>
+            <div id="packs-list" class="list"></div>
+            <button type="button" class="add" data-add="packs">+ Add pack</button>
+            <p class="hint">Pick a language to scope the pack, or <em>(any language)</em>. Mixing scoped and unscoped packs is not valid for codeql-config.</p>
+          </fieldset>
+
+          <fieldset>
+            <legend>paths (include)</legend>
+            <div id="paths-list" class="list"></div>
+            <button type="button" class="add" data-add="paths">+ Add path</button>
+          </fieldset>
+
+          <fieldset>
+            <legend>paths-ignore (exclude)</legend>
+            <div id="paths-ignore-list" class="list"></div>
+            <button type="button" class="add" data-add="paths-ignore">+ Add path</button>
+          </fieldset>
+
+          <fieldset>
+            <legend>query-filters</legend>
+            <div id="query-filters-list" class="list"></div>
+            <button type="button" class="add" data-add="query-filters">+ Add filter</button>
+            <p class="hint">Each filter is <code>include</code> or <code>exclude</code> keyed by tag/id (e.g. <code>id: js/missing-rate-limiting</code>).</p>
+          </fieldset>
+
+          <h3 class="section-title">Commit target</h3>
+          <div class="actions-row">
+            <label class="grow">
+              <span>Repo (owner/repo)</span>
+              <input name="repo_target" id="codeql-repo-target" type="text" placeholder="owner/repo" />
+            </label>
+            <label>
+              <span>Branch</span>
+              <input name="branch" type="text" placeholder="(default)" />
+            </label>
+            <label class="grow">
+              <span>Path</span>
+              <input name="path" type="text" value=".github/codeql/codeql-config.yml" />
+            </label>
+          </div>
+
+          <div class="actions-row">
+            <button type="button" id="codeql-load" class="secondary">Load existing</button>
+            <button type="button" id="codeql-preview" class="secondary">Preview YAML</button>
+            <button type="button" id="codeql-download" class="secondary">Download YAML</button>
+            <button type="button" id="codeql-commit" class="primary">Commit to repo</button>
+          </div>
+        </form>
+
+        <details open>
+          <summary>YAML preview</summary>
+          <pre id="codeql-yaml" class="yaml-preview"># Click "Preview YAML" to render.</pre>
+        </details>
+      </div>
+    </main>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
