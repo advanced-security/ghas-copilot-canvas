@@ -88,6 +88,9 @@ The canvas displays a live table of every repository that contains the dependenc
 - **Direct or transitive** classification
 - **Dependency path** from root to the package
 
+<img width="2876" height="1434" alt="image" src="https://github.com/user-attachments/assets/e7d64e14-ec38-4e31-81cd-045294d8e1a0" />
+
+
 ---
 
 ## Prerequisites
