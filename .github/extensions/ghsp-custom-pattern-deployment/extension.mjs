@@ -1,4 +1,4 @@
-// Extension: ss-custom-patterns
+// Extension: ghsp-custom-pattern-deployment
 // Deploy secret scanning custom patterns from patterns.yml files at the
 // enterprise / org / repo level via the private-preview REST API.
 
@@ -144,7 +144,7 @@ async function startServer(instanceId) {
 const session = await joinSession({
     canvases: [
         createCanvas({
-            id: "ss-custom-patterns",
+            id: "ghsp-custom-pattern-deployment",
             displayName: "Secret Scanning Custom Patterns",
             description: "Load patterns.yml configs and deploy secret-scanning custom patterns at the enterprise, org, or repo level.",
             actions: [
@@ -173,4 +173,4 @@ const session = await joinSession({
     ],
 });
 
-await session.log("ss-custom-patterns canvas ready", { ephemeral: true });
+await session.log("ghsp-custom-pattern-deployment canvas ready", { ephemeral: true });
