@@ -105,9 +105,11 @@ export async function ghApi(path, { method = "GET", body } = {}) {
     };
 }
 
-// Fetch a raw file from a repo via the contents API.
+// Fetch a raw file from a repo via the contents API. Path segments are encoded
+// individually so slashes are preserved while spaces/# and similar are escaped.
 export async function ghRawFile(owner, repo, path, ref) {
-    const args = ["api", "-H", "Accept: application/vnd.github.raw+json", `/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`];
+    const encPath = String(path).split("/").map(encodeURIComponent).join("/");
+    const args = ["api", "-H", "Accept: application/vnd.github.raw+json", `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encPath}?ref=${encodeURIComponent(ref)}`];
     const { code, stdout, stderr } = await runWithFallback(args);
     if (code !== 0) {
         const data = tryJson(stdout);

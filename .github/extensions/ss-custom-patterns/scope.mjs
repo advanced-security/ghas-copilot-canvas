@@ -20,17 +20,20 @@ export function scopePath(level, target) {
     throw new Error(`Unknown level: ${level}`);
 }
 
-// Build a UI deep link to a deployed pattern's settings page.
+// Build a UI deep link to a deployed pattern's settings page. Segments are
+// encoded to stay consistent with scopePath() (slugs are normally URL-safe, but
+// encoding is harmless and avoids surprises).
 export function deepLink(level, target, id) {
     if (id == null) return null;
+    const eid = encodeURIComponent(String(id));
     if (level === "enterprise") {
-        return `https://github.com/enterprises/${target.enterprise}/settings/advanced_security/custom_patterns/${id}`;
+        return `https://github.com/enterprises/${encodeURIComponent(target.enterprise)}/settings/advanced_security/custom_patterns/${eid}`;
     }
     if (level === "org") {
-        return `https://github.com/organizations/${target.org}/settings/security_analysis/custom_patterns/${id}`;
+        return `https://github.com/organizations/${encodeURIComponent(target.org)}/settings/security_analysis/custom_patterns/${eid}`;
     }
     if (level === "repo") {
-        return `https://github.com/${target.owner}/${target.repo}/settings/security_analysis/custom_patterns/${id}`;
+        return `https://github.com/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}/settings/security_analysis/custom_patterns/${eid}`;
     }
     return null;
 }

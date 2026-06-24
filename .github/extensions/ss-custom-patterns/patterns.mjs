@@ -82,7 +82,8 @@ function parseYamlSafe(text, file) {
     try {
         return normalizeDoc(yaml.load(text), file);
     } catch (err) {
-        return { file, name: file, error: `YAML parse error: ${err.message}`, patterns: [] };
+        const msg = err && err.message ? err.message : String(err);
+        return { file, name: file, error: `YAML parse error: ${msg}`, patterns: [] };
     }
 }
 

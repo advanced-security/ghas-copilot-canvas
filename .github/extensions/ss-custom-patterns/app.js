@@ -17,8 +17,15 @@ function keyOf(file, name) { return file + "::" + name; }
 function norm(s) { return String(s || "").trim().toLowerCase(); }
 
 async function api(path, opts) {
-  const res = await fetch(path, opts);
-  return res.json();
+  // Always resolve to a consistent { ok, error? } shape. A thrown fetch (server
+  // restarted mid-call, offline) or a non-JSON body must not reject, or callers
+  // that disable a button before awaiting would leave it stuck disabled.
+  try {
+    const res = await fetch(path, opts);
+    return await res.json();
+  } catch (e) {
+    return { ok: false, error: "Request failed: " + (e && e.message ? e.message : String(e)) };
+  }
 }
 
 function toast(msg, kind) {
