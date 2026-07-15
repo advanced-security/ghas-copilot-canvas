@@ -93,9 +93,28 @@ The canvas displays a live table of every repository that contains the dependenc
 
 ---
 
+### 3. 🔐 Secret Scanning Custom Pattern Deployment
+
+> `.github/extensions/ghsp-custom-pattern-deployment/`
+
+Bulk-deploys **secret-scanning custom patterns** to an **enterprise, organization, or repository**. It loads `patterns.yml` configs (for example the samples in [advanced-security/secret-scanning-custom-patterns](https://github.com/advanced-security/secret-scanning-custom-patterns), or a local path) and turns the slow, one-at-a-time UI workflow into a browse, filter, select, deploy flow over the private-preview custom-patterns REST API.
+
+#### Highlights
+
+- **Load from anywhere** — recursive scan of a repo for every `patterns.yml`, or a local path, with branch/ref override.
+- **Browse + inspect** — expandable tree grouped by config file, showing type, regex, delimiters, "must not match" rules, and `test:` cases with the offset substring highlighted.
+- **Deploy at three levels** — Enterprise / Org / Repo, with per-level API paths and UI deep links.
+- **Load deployed state** — live **State** (published/unpublished) and **Push Protection** status per pattern, deep-linked to the right settings page.
+- **Bulk deploy** — select across files and create many patterns at once (created as unpublished, per the API).
+- **Built for scale** — server-side repo search (5k+ repo orgs resolve in seconds) and pickers that auto-switch between dropdown and type-ahead at 100+ entries.
+
+It understands the full **unpublished -> dry run -> publish -> push protection** lifecycle and links you to where each UI-only step happens, rather than pretending the API can do it. See the [extension README](.github/extensions/ghsp-custom-pattern-deployment/README.md) for full details and the known private-preview API limitations.
+
+---
+
 ## Prerequisites
 
-Both extensions require:
+All extensions require:
 
 - [**Copilot CLI**](https://githubnext.com/projects/copilot-cli) with canvas support
 - [**`gh` CLI**](https://cli.github.com/) v2.x, authenticated (`gh auth login`)
@@ -115,7 +134,7 @@ cd ghas-copilot-canvas
 # open a Copilot CLI session in this directory
 ```
 
-Both canvases will be available immediately.
+All three canvases will be available immediately.
 
 ---
 
@@ -131,8 +150,18 @@ Both canvases will be available immediately.
 │       ├── index.html       # Iframe UI
 │       ├── app.js
 │       └── styles.css
-└── sbom-dependency-audit/
-    └── extension.mjs        # Canvas + SBOM scanning logic
+├── sbom-dependency-audit/
+│   └── extension.mjs        # Canvas + SBOM scanning logic
+└── ghsp-custom-pattern-deployment/
+    ├── extension.mjs        # Canvas + loopback HTTP server / API endpoints
+    ├── gh.mjs               # gh api wrapper (auth fallback, pagination)
+    ├── patterns.mjs         # patterns.yml discovery + normalization
+    ├── scope.mjs            # scope paths, deep links, list/deploy ops
+    ├── ui.mjs               # Iframe HTML renderer
+    ├── index.html           # UI layout + styling
+    ├── app.js               # Frontend logic
+    ├── js-yaml.mjs          # Vendored YAML parser
+    └── README.md
 ```
 
 ---

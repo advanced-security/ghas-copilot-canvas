@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Secret Scanning Custom Patterns</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--background-color-default, #ffffff);
+    color: var(--text-color-default, #1f2328);
+    font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+    font-size: var(--text-body-medium, 14px);
+    line-height: var(--leading-body-medium, 20px);
+  }
+  a { color: var(--true-color-blue, #0969da); }
+  h1 { font-size: var(--text-title-large, 22px); font-weight: var(--font-weight-semibold, 600); margin: 0 0 2px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-color-muted, #656d76); margin: 0 0 8px; }
+  .muted { color: var(--text-color-muted, #656d76); }
+  code, pre { font-family: var(--font-mono, "SFMono-Regular", Consolas, monospace); }
+  pre { margin: 4px 0 0; padding: 8px; background: var(--background-color-muted, #f6f8fa); border: 1px solid var(--border-color-default, #d0d7de); border-radius: 6px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 16px 18px 120px; }
+  header.top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+
+  .card { border: 1px solid var(--border-color-default, #d0d7de); border-radius: 8px; padding: 14px; margin: 12px 0; background: var(--background-color-default, #fff); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+
+  label.fld { display: block; margin: 8px 0 4px; font-weight: var(--font-weight-semibold, 600); font-size: 13px; }
+  input[type=text], select {
+    width: 100%; padding: 6px 8px; border-radius: 6px;
+    border: 1px solid var(--border-color-default, #d0d7de);
+    background: var(--background-color-default, #fff); color: inherit; font: inherit;
+  }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .seg { display: inline-flex; border: 1px solid var(--border-color-default, #d0d7de); border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; background: transparent; padding: 6px 12px; cursor: pointer; color: inherit; font: inherit; }
+  .seg button.active { background: var(--true-color-blue, #0969da); color: var(--color-white, #fff); }
+
+  button.btn { font: inherit; cursor: pointer; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--border-color-default, #d0d7de); background: var(--background-color-muted, #f6f8fa); color: inherit; }
+  button.btn:hover { filter: brightness(0.97); }
+  button.btn:disabled { opacity: .5; cursor: not-allowed; }
+  button.btn.primary { background: var(--true-color-green, #1f883d); border-color: var(--true-color-green, #1f883d); color: #fff; }
+  button.btn.accent { background: var(--true-color-blue, #0969da); border-color: var(--true-color-blue, #0969da); color: #fff; }
+
+  .hidden { display: none !important; }
+
+  .limit { border-left: 3px solid var(--true-color-yellow, #d4a72c); background: color-mix(in srgb, var(--true-color-yellow, #d4a72c) 10%, transparent); padding: 8px 12px; border-radius: 0 6px 6px 0; font-size: 13px; }
+  .limit ul { margin: 6px 0 0; padding-left: 18px; }
+  .limit li { margin: 2px 0; }
+
+  /* tree */
+  .tree { border: 1px solid var(--border-color-default, #d0d7de); border-radius: 8px; overflow: hidden; }
+  .grp { border-top: 1px solid var(--border-color-default, #d0d7de); }
+  .grp:first-child { border-top: 0; }
+  .grp-hd, .pat-hd { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
+  .grp-hd { background: var(--background-color-muted, #f6f8fa); }
+  .pat { border-top: 1px dashed var(--border-color-muted, #d8dee4); }
+  .pat-hd { padding-left: 30px; }
+  .caret { cursor: pointer; width: 16px; text-align: center; user-select: none; color: var(--text-color-muted, #656d76); flex: 0 0 auto; }
+  .caret.empty { visibility: hidden; }
+  .nm { font-weight: var(--font-weight-semibold, 600); }
+  .spacer { flex: 1 1 auto; }
+  .detail { padding: 4px 10px 12px 52px; }
+  .detail .lbl { font-weight: 600; font-size: 12px; color: var(--text-color-muted,#656d76); margin-top: 8px; }
+  .test-box .mark { background: var(--true-color-yellow-muted, #fff8c5); color: var(--text-color-default,#1f2328); border-radius: 3px; padding: 0 1px; box-shadow: 0 0 0 1px var(--true-color-yellow, #d4a72c); font-weight: 600; }
+
+  .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid transparent; white-space: nowrap; }
+  .b-pub { background: color-mix(in srgb, var(--true-color-green,#1f883d) 16%, transparent); color: var(--true-color-green,#1a7f37); border-color: color-mix(in srgb, var(--true-color-green,#1f883d) 40%, transparent); }
+  .b-unpub { background: color-mix(in srgb, var(--true-color-yellow,#d4a72c) 18%, transparent); color: #9a6700; border-color: color-mix(in srgb, var(--true-color-yellow,#d4a72c) 45%, transparent); }
+  .b-none { background: var(--background-color-muted,#f6f8fa); color: var(--text-color-muted,#656d76); border-color: var(--border-color-default,#d0d7de); }
+  .b-pp-on { background: color-mix(in srgb, var(--true-color-blue,#0969da) 15%, transparent); color: var(--true-color-blue,#0969da); border-color: color-mix(in srgb, var(--true-color-blue,#0969da) 40%, transparent); }
+  .b-pp-off { background: color-mix(in srgb, var(--true-color-yellow,#d4a72c) 12%, transparent); color: #7a5c00; border-color: color-mix(in srgb, var(--true-color-yellow,#d4a72c) 30%, transparent); }
+  .b-pp-off-link { background: color-mix(in srgb, var(--true-color-orange,#bc4c00) 16%, transparent); color: var(--true-color-orange,#bc4c00); border-color: color-mix(in srgb, var(--true-color-orange,#bc4c00) 45%, transparent); }
+  .b-exp { background: color-mix(in srgb, var(--true-color-purple,#8250df) 15%, transparent); color: var(--true-color-purple,#8250df); border-color: color-mix(in srgb, var(--true-color-purple,#8250df) 40%, transparent); }
+  .b-type { background: var(--background-color-muted,#f6f8fa); color: var(--text-color-muted,#656d76); border-color: var(--border-color-default,#d0d7de); font-family: var(--font-mono, monospace); }
+  a.badge { text-decoration: none; }
+  a.badge.badge-link:hover { text-decoration: underline; cursor: pointer; filter: brightness(0.96); }
+
+  .actionbar { position: sticky; bottom: 0; left: 0; right: 0; background: var(--background-color-default,#fff); border-top: 1px solid var(--border-color-default,#d0d7de); padding: 10px 18px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .toast { font-size: 13px; }
+  .toast.err { color: var(--true-color-red,#cf222e); }
+  .toast.ok { color: var(--true-color-green,#1a7f37); }
+
+  .filters { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+  .filters select { width: auto; }
+  .summary { font-size: 13px; }
+
+  /* modal */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  .modal { background: var(--background-color-default,#fff); border: 1px solid var(--border-color-default,#d0d7de); border-radius: 10px; max-width: 520px; width: 92%; padding: 18px; box-shadow: 0 8px 30px rgba(0,0,0,.25); }
+  .modal h3 { margin: 0 0 8px; }
+  .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  .chk { display: inline-flex; gap: 6px; align-items: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Secret Scanning Custom Patterns</h1>
+      <div class="muted">Load <code>patterns.yml</code> configs and deploy them at the enterprise, org, or repo level.</div>
+    </div>
+    <button class="btn" id="toggleLimits">Limitations</button>
+  </header>
+
+  <div class="limit hidden" id="limits">
+    <strong>Private preview API — known limitations:</strong>
+    <ul>
+      <li>Patterns are created as <strong>unpublished</strong>. Publishing &amp; enabling push protection must be done in the GitHub UI.</li>
+      <li>No API signal for <strong>dry-run status</strong> — you cannot tell when a pattern's dry run has completed or that it is ready to publish. The list endpoint exposes only <code>state</code> and <code>push_protection_enabled</code>.</li>
+      <li>No update or delete of existing patterns via the API.</li>
+      <li>List endpoints have no server-side filtering/sorting/pagination (filtering here is client-side).</li>
+      <li>Enterprise endpoints are <strong>GHEC only</strong> and do not support GitHub App auth.</li>
+    </ul>
+  </div>
+
+  <div class="grid2">
+    <!-- SOURCE -->
+    <div class="card">
+      <h2>1 · Pattern source</h2>
+      <div class="seg" id="srcSeg">
+        <button data-src="remote" class="active">Remote repo</button>
+        <button data-src="local">Local path</button>
+      </div>
+
+      <div id="srcRemote">
+        <label class="fld">Repository (owner/repo)</label>
+        <input type="text" id="repo" value="advanced-security/secret-scanning-custom-patterns" />
+        <label class="fld">Ref / branch <span class="muted">(blank = default branch)</span></label>
+        <input type="text" id="ref" placeholder="main" />
+      </div>
+
+      <div id="srcLocal" class="hidden">
+        <label class="fld">Local path to a repo or patterns.yml</label>
+        <input type="text" id="localPath" placeholder="D:\repos\advanced-security\secret-scanning-custom-patterns" />
+      </div>
+
+      <div class="row" style="margin-top:12px;">
+        <button class="btn accent" id="loadBtn">Load patterns.yml</button>
+        <span class="muted summary" id="srcSummary"></span>
+      </div>
+    </div>
+
+    <!-- TARGET -->
+    <div class="card">
+      <h2>2 · Deploy target</h2>
+      <div class="seg" id="lvlSeg">
+        <button data-lvl="enterprise">Enterprise</button>
+        <button data-lvl="org" class="active">Organization</button>
+        <button data-lvl="repo">Repository</button>
+      </div>
+
+      <div id="lvlEnterprise" class="hidden">
+        <label class="fld">Enterprise slug</label>
+        <input type="text" id="entSlug" placeholder="my-enterprise" />
+      </div>
+
+      <div id="lvlOrg">
+        <label class="fld">Organization</label>
+        <div class="row">
+          <select id="orgSel"><option value="">Loading orgs…</option></select>
+          <input id="orgSelI" class="hidden" type="text" list="orgList" placeholder="Type to search orgs…" autocomplete="off" spellcheck="false" />
+          <datalist id="orgList"></datalist>
+          <button class="btn" id="reloadOrgs" title="Reload orgs">↻</button>
+        </div>
+      </div>
+
+      <div id="lvlRepo" class="hidden">
+        <label class="fld">Organization</label>
+        <div class="row">
+          <select id="orgSelRepo"><option value="">Loading orgs…</option></select>
+          <input id="orgSelRepoI" class="hidden" type="text" list="orgListR" placeholder="Type to search orgs…" autocomplete="off" spellcheck="false" />
+          <datalist id="orgListR"></datalist>
+          <button class="btn" id="reloadOrgs2" title="Reload orgs">↻</button>
+        </div>
+        <label class="fld">Repository</label>
+        <select id="repoSel"><option value="">Select an org first</option></select>
+        <input id="repoSelI" class="hidden" type="text" list="repoList" placeholder="Select an org first" autocomplete="off" spellcheck="false" />
+        <datalist id="repoList"></datalist>
+      </div>
+
+      <div class="row" style="margin-top:12px;">
+        <button class="btn accent" id="loadStateBtn">Load deployed state</button>
+        <span class="muted summary" id="tgtSummary"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- FILTERS + TREE -->
+  <div class="card">
+    <h2>3 · Patterns</h2>
+    <div class="filters" id="filters">
+      <input type="text" id="search" placeholder="Filter by name…" style="width:200px;" />
+      <span>State
+        <select id="fState">
+          <option value="all">All</option>
+          <option value="published">Published</option>
+          <option value="unpublished">Unpublished</option>
+          <option value="not_deployed">Not deployed</option>
+        </select>
+      </span>
+      <span>Push protection
+        <select id="fPP">
+          <option value="all">All</option>
+          <option value="enabled">Enabled</option>
+          <option value="disabled">Disabled</option>
+        </select>
+      </span>
+      <span class="spacer"></span>
+      <button class="btn" id="selAll" title="Select every pattern matching the current filter">Select all</button>
+      <button class="btn" id="deselAll" title="Deselect every pattern matching the current filter">Deselect all</button>
+      <button class="btn" id="expandAll">Expand all</button>
+      <button class="btn" id="collapseAll">Collapse all</button>
+      <span class="summary" id="treeSummary"></span>
+    </div>
+    <div id="tree" class="tree" style="margin-top:12px;">
+      <div class="muted" style="padding:16px;">Load a pattern source to begin.</div>
+    </div>
+  </div>
+</div>
+
+<!-- STICKY ACTION BAR -->
+<div class="actionbar">
+  <button class="btn primary" id="deployBtn">Deploy selected</button>
+  <label class="chk"><input type="checkbox" id="skipDeployed" checked /> Skip already-deployed</label>
+  <span class="spacer"></span>
+  <span class="summary muted" id="selSummary">0 selected</span>
+  <span class="toast" id="toast"></span>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
