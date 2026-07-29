@@ -1,6 +1,6 @@
 // Extension: ghsp-custom-pattern-deployment
 // Deploy secret scanning custom patterns from patterns.yml files at the
-// enterprise / org / repo level via the private-preview REST API.
+// enterprise / org / repo level via the (now GA) custom patterns REST API.
 
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
@@ -99,7 +99,9 @@ async function handleApi(req, res, url) {
             const r = await listDeployed(level, target || {});
             if (r.ok) {
                 const enriched = r.patterns.map((p) => ({ ...p, html_url: deepLink(level, target || {}, p.id) }));
-                return sendJson(res, 200, { ok: true, patterns: enriched });
+                // Spread the rest of `r` (e.g. `warning` from a pagination hiccup)
+                // so it isn't silently dropped on the way to the frontend.
+                return sendJson(res, 200, { ...r, ok: true, patterns: enriched });
             }
             return sendJson(res, 200, r);
         }
@@ -109,7 +111,7 @@ async function handleApi(req, res, url) {
             const r = await deployPatterns(level, target || {}, patterns);
             if (r.ok) {
                 const created = (r.created || []).map((p) => ({ ...p, html_url: deepLink(level, target || {}, p.id) }));
-                return sendJson(res, 200, { ok: true, created });
+                return sendJson(res, 200, { ...r, ok: true, created });
             }
             return sendJson(res, 200, r);
         }

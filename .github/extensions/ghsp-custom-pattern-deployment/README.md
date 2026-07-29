@@ -2,7 +2,7 @@
 
 > `.github/extensions/ghsp-custom-pattern-deployment/`
 
-A GitHub Copilot CLI **canvas extension** for bulk-deploying secret-scanning custom patterns. It loads `patterns.yml` configs (for example the samples in [advanced-security/secret-scanning-custom-patterns](https://github.com/advanced-security/secret-scanning-custom-patterns)) and deploys the patterns you pick to an **enterprise, organization, or repository** in one action, using the private-preview custom-patterns REST API.
+A GitHub Copilot CLI **canvas extension** for bulk-deploying secret-scanning custom patterns. It loads `patterns.yml` configs (for example the samples in [advanced-security/secret-scanning-custom-patterns](https://github.com/advanced-security/secret-scanning-custom-patterns)) and deploys the patterns you pick to an **enterprise, organization, or repository** in one action, using the (now GA) custom-patterns REST API.
 
 It exists because deploying these patterns through the GitHub UI one at a time is slow and error-prone. This canvas turns that into a browse, filter, select, deploy flow.
 
@@ -16,7 +16,7 @@ It exists because deploying these patterns through the GitHub UI one at a time i
 - **Load deployed state** — queries what already exists at the target and shows live **State** (published/unpublished) and **Push Protection** (on/off) per pattern, with deep links to the exact settings page to manage each.
 - **Bulk deploy** — select across files and create many patterns at once, with a confirmation modal that warns they land **unpublished**.
 - **Smart filtering and selection** — filter by name, State, Push Protection, and "not deployed"; filter-aware Select all / Deselect all; a "skip already-deployed" toggle; and warnings when a filter hides patterns you have selected.
-- **In-UI limitations panel** — surfaces the private-preview API constraints right where you are working.
+- **In-UI limitations panel** — surfaces the API's remaining constraints right where you are working.
 
 ---
 
@@ -49,14 +49,15 @@ Then in the canvas:
 
 ---
 
-## Known limitations (private-preview API)
+## Known limitations
 
-These are constraints of the underlying API, not the extension. The canvas surfaces them in its limitations panel:
+These are constraints of the underlying API (or gaps in this canvas's UI), not bugs. The canvas surfaces them in its limitations panel:
 
-- Patterns are created **unpublished**. Publishing and enabling push protection must be done in the GitHub UI.
+- Patterns are created **unpublished**. Publishing and enabling push protection must be done in the GitHub UI — there is still no publish endpoint.
 - **No API signal for dry-run status** — you cannot tell when a pattern's dry run has completed or that it is ready to publish.
-- **No update or delete** of existing patterns via the API.
-- List endpoints have **no server-side filtering, sorting, or pagination** (filtering in the canvas is client-side).
+- This canvas only **creates** patterns. The REST API now also supports **updating** and **bulk-deleting** existing patterns, but this UI does not yet expose those actions.
+- The list endpoints now support server-side `state`/`push_protection` filtering, sorting, and pagination. This canvas paginates internally to fetch the complete deployed list, but filtering/sorting in the UI itself is still client-side.
+- Push protection can now be toggled via a separate `pattern-configurations` API endpoint, but this canvas does not yet expose a toggle — use the deep link to manage it in the GitHub UI.
 - Enterprise endpoints are **GHEC only** and do not support GitHub App authentication.
 
 ---

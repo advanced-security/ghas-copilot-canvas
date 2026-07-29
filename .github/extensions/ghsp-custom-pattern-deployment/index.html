@@ -108,12 +108,13 @@
   </header>
 
   <div class="limit hidden" id="limits">
-    <strong>Private preview API — known limitations:</strong>
+    <strong>Known limitations:</strong>
     <ul>
-      <li>Patterns are created as <strong>unpublished</strong>. Publishing &amp; enabling push protection must be done in the GitHub UI.</li>
+      <li>Patterns are created as <strong>unpublished</strong>. Publishing &amp; enabling push protection must be done in the GitHub UI (there is still no publish endpoint).</li>
       <li>No API signal for <strong>dry-run status</strong> — you cannot tell when a pattern's dry run has completed or that it is ready to publish. The list endpoint exposes only <code>state</code> and <code>push_protection_enabled</code>.</li>
-      <li>No update or delete of existing patterns via the API.</li>
-      <li>List endpoints have no server-side filtering/sorting/pagination (filtering here is client-side).</li>
+      <li>This canvas only <strong>creates</strong> patterns. The API now also supports updating and bulk-deleting existing patterns, but this UI does not yet expose those actions.</li>
+      <li>The API now supports server-side filtering, sorting, and pagination on list endpoints; this canvas fetches the full deployed list (paginating internally) but still filters/sorts client-side for the UI.</li>
+      <li>Push protection can now be toggled via a separate API endpoint, but this canvas does not yet expose a toggle — use the deep link to manage it in the GitHub UI.</li>
       <li>Enterprise endpoints are <strong>GHEC only</strong> and do not support GitHub App auth.</li>
     </ul>
   </div>

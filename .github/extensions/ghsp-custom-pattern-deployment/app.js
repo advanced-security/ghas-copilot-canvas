@@ -168,7 +168,8 @@ async function loadPatterns() {
   let total = 0; state.configs.forEach((c) => total += (c.patterns || []).length);
   const src = r.source || {};
   $("srcSummary").textContent = (src.type === "local" ? src.path : (src.repo + "@" + src.ref)) + " — " + state.configs.length + " files, " + total + " patterns";
-  toast("Loaded " + total + " patterns from " + state.configs.length + " files", "ok");
+  if (r.warning) toast("Loaded " + total + " patterns from " + state.configs.length + " files. ⚠ " + r.warning, "err");
+  else toast("Loaded " + total + " patterns from " + state.configs.length + " files", "ok");
   renderTree();
 }
 
@@ -197,7 +198,13 @@ async function loadState() {
   for (const p of r.patterns) byName.set(norm(p.name), p);
   state.deployed = { byName };
   renderTree();
-  toast(r.patterns.length + " patterns currently deployed at " + lbl, "ok");
+  if (r.warning) {
+    // Pagination stopped early (e.g. a transient error mid-fetch): what we have
+    // is real but may be incomplete, so warn instead of claiming a full count.
+    toast(r.patterns.length + " patterns loaded for " + lbl + ", but the list may be incomplete: " + r.warning, "err");
+  } else {
+    toast(r.patterns.length + " patterns currently deployed at " + lbl, "ok");
+  }
 }
 
 // ---------- deploy ----------

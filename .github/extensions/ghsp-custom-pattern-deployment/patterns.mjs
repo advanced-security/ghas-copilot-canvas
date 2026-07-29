@@ -105,12 +105,24 @@ export async function loadRemote({ repo, ref }) {
         return { ok: false, error: `Could not read repo tree (${tree.status}): ${tree.error}` };
     }
     const entries = Array.isArray(tree.data?.tree) ? tree.data.tree : [];
+    // GitHub caps the recursive tree at 100,000 entries / 7MB; beyond that it sets
+    // `truncated: true` and silently omits the rest, which could hide patterns.yml
+    // files deep in a very large repo without any indication in the UI.
+    const truncated = !!tree.data?.truncated;
+    const warning = truncated
+        ? "The repository tree was truncated by GitHub (100,000+ entries or 7MB+). Some patterns.yml files may not have been found; consider pointing at a subdirectory or a smaller ref."
+        : undefined;
     const ymlPaths = entries
         .filter((e) => e.type === "blob" && /(^|\/)patterns\.ya?ml$/i.test(e.path))
         .map((e) => e.path)
         .sort();
     if (ymlPaths.length === 0) {
-        return { ok: false, error: "No patterns.yml files found in that repo/ref." };
+        return {
+            ok: false,
+            error: truncated
+                ? "No patterns.yml files found before GitHub truncated the repo tree (100,000+ entries or 7MB+). There may be more; try a subdirectory or a smaller ref."
+                : "No patterns.yml files found in that repo/ref.",
+        };
     }
 
     const configs = [];
@@ -130,7 +142,7 @@ export async function loadRemote({ repo, ref }) {
     }
     await Promise.all([worker(), worker(), worker(), worker()]);
     configs.sort((a, b) => a.file.localeCompare(b.file));
-    return { ok: true, source: { type: "remote", repo: `${owner}/${name}`, ref: resolvedRef }, configs };
+    return { ok: true, source: { type: "remote", repo: `${owner}/${name}`, ref: resolvedRef }, configs, warning };
 }
 
 // ---- Local loading ----------------------------------------------------------

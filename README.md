@@ -97,7 +97,7 @@ The canvas displays a live table of every repository that contains the dependenc
 
 > `.github/extensions/ghsp-custom-pattern-deployment/`
 
-Bulk-deploys **secret-scanning custom patterns** to an **enterprise, organization, or repository**. It loads `patterns.yml` configs (for example the samples in [advanced-security/secret-scanning-custom-patterns](https://github.com/advanced-security/secret-scanning-custom-patterns), or a local path) and turns the slow, one-at-a-time UI workflow into a browse, filter, select, deploy flow over the private-preview custom-patterns REST API.
+Bulk-deploys **secret-scanning custom patterns** to an **enterprise, organization, or repository**. It loads `patterns.yml` configs (for example the samples in [advanced-security/secret-scanning-custom-patterns](https://github.com/advanced-security/secret-scanning-custom-patterns), or a local path) and turns the slow, one-at-a-time UI workflow into a browse, filter, select, deploy flow over the custom-patterns REST API (GA).
 
 #### Highlights
 
@@ -108,7 +108,7 @@ Bulk-deploys **secret-scanning custom patterns** to an **enterprise, organizatio
 - **Bulk deploy** — select across files and create many patterns at once (created as unpublished, per the API).
 - **Built for scale** — server-side repo search (5k+ repo orgs resolve in seconds) and pickers that auto-switch between dropdown and type-ahead at 100+ entries.
 
-It understands the full **unpublished -> dry run -> publish -> push protection** lifecycle and links you to where each UI-only step happens, rather than pretending the API can do it. See the [extension README](.github/extensions/ghsp-custom-pattern-deployment/README.md) for full details and the known private-preview API limitations.
+It understands the full **unpublished -> dry run -> publish -> push protection** lifecycle and links you to where each UI-only step happens, rather than pretending the API can do it. See the [extension README](.github/extensions/ghsp-custom-pattern-deployment/README.md) for full details and the known API/UI limitations.
 
 ---
 
