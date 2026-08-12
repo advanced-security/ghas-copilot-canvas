@@ -110,6 +110,8 @@ Bulk-deploys **secret-scanning custom patterns** to an **enterprise, organizatio
 
 It understands the full **unpublished -> dry run -> publish -> push protection** lifecycle and links you to where each UI-only step happens, rather than pretending the API can do it. See the [extension README](.github/extensions/ghsp-custom-pattern-deployment/README.md) for full details and the known API/UI limitations.
 
+<img width="1142" height="993" alt="image" src="https://github.com/user-attachments/assets/2e33a413-e52c-4b99-a308-a55154b23b53" />
+
 ---
 
 ## Prerequisites
