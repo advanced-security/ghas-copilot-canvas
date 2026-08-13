@@ -2,7 +2,7 @@
 
 A collection of **GitHub Copilot CLI canvas extensions** for GitHub Advanced Security (GHAS) workflows. Canvases are interactive side-panel UIs that appear inside the Copilot CLI app — they let you interact with rich forms and live data without leaving your terminal workflow.
 
----
+--- test
 
 ## Extensions
 
