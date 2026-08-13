@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Code Quality Enablement</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="title">
+      <h1>🧪 Code Quality Enablement</h1>
+      <p class="subtitle">Bulk enable/disable <a href="https://docs.github.com/en/code-security/how-tos/maintain-quality-code/enable-code-quality" target="_blank" rel="noreferrer">GitHub Code Quality</a> across every org in an enterprise</p>
+    </div>
+    <div class="whoami" id="whoami">
+      <div class="whoami-row">
+        <span id="whoami-login">Signed in as …</span>
+      </div>
+      <div class="whoami-scopes" id="whoami-scopes"></div>
+      <div class="whoami-modes hidden" id="whoami-modes">
+        <span class="hint">Use:</span>
+        <button class="mode-btn" data-mode="auto" id="mode-auto-btn" title="Use the environment token, falling back to the keyring login on scope errors">Auto</button>
+        <button class="mode-btn" data-mode="env" id="mode-env-btn" title="Always use the GH_TOKEN/GITHUB_TOKEN environment token">Env token</button>
+        <button class="mode-btn" data-mode="keyring" id="mode-keyring-btn" title="Always use the gh CLI's stored (keyring) login">Keyring login</button>
+      </div>
+    </div>
+  </header>
+
+  <section class="load-bar">
+    <label for="enterprise-input">Enterprise slug</label>
+    <input id="enterprise-input" type="text" placeholder="e.g. my-enterprise" autocomplete="off" />
+    <button id="load-btn" class="btn primary">Load organizations</button>
+    <span id="load-status" class="hint"></span>
+  </section>
+
+  <section id="toolbar" class="toolbar hidden">
+    <div class="left">
+      <label class="checkbox">
+        <input type="checkbox" id="select-all" />
+        <span id="select-count">0 selected</span>
+      </label>
+    </div>
+    <div class="right">
+      <button id="check-selected-btn" class="btn">Check status</button>
+      <div class="access-picker">
+        <label class="hint" for="access-select">Repository access:</label>
+        <select id="access-select" disabled>
+          <option value="" selected disabled>Choose an action…</option>
+          <option value="all">All repositories</option>
+          <option value="none">No repositories</option>
+          <option value="filter">Matching a filter…</option>
+          <option value="let-decide" title="Not settable via API — GitHub has no endpoint for this org-level policy. We can only read/set the current state of each repo, so this can't be applied here.">Let repositories decide (unsupported)</option>
+          <option value="selected-repos" title="Per-repo selection is intentionally unsupported here — orgs can have 10k+ repos, so picking individual repos wouldn't scale.">Selected repositories… (unsupported)</option>
+        </select>
+        <button id="access-apply-btn" class="btn small" disabled>Apply</button>
+      </div>
+      <div class="access-picker">
+        <label class="hint" for="ai-select" title="AI findings (Scans) is a separate on/off flag from the main Code Quality toggle above. GitHub only allows enabling it on repos where Code Quality is already configured.">AI scans:</label>
+        <select id="ai-select" disabled>
+          <option value="" selected disabled>Choose an action…</option>
+          <option value="on">Enable AI scans</option>
+          <option value="off">Disable AI scans</option>
+        </select>
+        <button id="ai-apply-btn" class="btn small" disabled>Apply</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="filter-panel" class="filter-panel hidden">
+    <div class="filter-panel-header">
+      <strong id="filter-panel-target">Matching a filter — applies to selected organizations</strong>
+      <button id="filter-panel-close" class="btn small" type="button">✕</button>
+    </div>
+    <p class="hint">Only repos matching <em>all</em> of the criteria below are changed; non-matching repos are left as-is (this differs from GitHub's org-level "Matching a filter" policy, which also governs future repos — ours is a one-time bulk apply).</p>
+    <div class="filter-fields">
+      <label>Name contains<input id="filter-name" type="text" placeholder="e.g. service-" /></label>
+      <label>Language<input id="filter-language" type="text" placeholder="e.g. JavaScript" /></label>
+      <label>Topic<input id="filter-topic" type="text" placeholder="e.g. backend" /></label>
+    </div>
+    <div class="filter-actions">
+      <button id="filter-enable-btn" class="btn success">Enable matching</button>
+      <button id="filter-disable-btn" class="btn danger">Disable matching</button>
+    </div>
+  </section>
+
+  <section id="empty-state" class="empty-state">
+    <p>Enter an enterprise slug above and click <strong>Load organizations</strong> to get started.</p>
+    <p class="hint">Code Quality has no org-level API yet, so toggling an org here applies the repo-level
+      <code>code-quality/setup</code> API across every repo in that org, in the background. Orgs can hold
+      10k+ repos, so per-repo detail is intentionally not shown in this table.</p>
+  </section>
+
+  <section id="table-wrap" class="table-wrap hidden">
+    <table id="orgs-table">
+      <thead>
+        <tr>
+          <th class="col-check"></th>
+          <th class="col-org">Organization</th>
+          <th class="col-repos">Repos</th>
+          <th class="col-status">Code Quality</th>
+          <th class="col-ai">AI scans</th>
+          <th class="col-actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="orgs-tbody"></tbody>
+    </table>
+  </section>
+
+  <details class="card diagnostic-panel" id="diagnostic-panel">
+    <summary>
+      <span class="diagnostic-title">
+        <strong>API activity</strong>
+        <span>Redacted gh CLI request/response log</span>
+      </span>
+      <span class="status-chip neutral" id="diagnostic-count">0 entries</span>
+    </summary>
+    <div class="diagnostic-body">
+      <div class="diagnostic-toolbar">
+        <p id="diagnostic-hint">Held only in memory for this canvas. Credentials are redacted and large bodies are truncated.</p>
+        <div class="button-group">
+          <button class="btn small" type="button" id="diagnostic-refresh-btn">Refresh</button>
+          <button class="btn small" type="button" id="diagnostic-copy-latest-btn">Copy latest response</button>
+          <button class="btn small" type="button" id="diagnostic-copy-all-btn">Copy all</button>
+          <button class="btn small" type="button" id="diagnostic-clear-btn">Clear</button>
+        </div>
+      </div>
+      <div class="diagnostic-list" id="diagnostic-list" role="log" aria-live="polite">
+        <div class="empty-list">
+          <strong>No API activity yet</strong>
+          <span>gh CLI calls will appear here as you use the canvas.</span>
+        </div>
+      </div>
+    </div>
+  </details>
+
+  <script src="/app.js"></script>
+</body>
+</html>
