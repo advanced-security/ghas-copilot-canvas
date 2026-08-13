@@ -219,7 +219,7 @@
             ${avatar}
             <div>
               <div class="org-login">${escapeHtml(org.login)}</div>
-              ${org.name ? `<div class="org-name">${escapeHtml(org.name)}</div>` : ""}
+              ${org.name && org.name !== org.login ? `<div class="org-name">${escapeHtml(org.name)}</div>` : ""}
             </div>
             ${org.login ? `<a class="org-link" href="https://github.com/organizations/${encodeURIComponent(org.login)}/settings/code-quality" target="_blank" rel="noreferrer" title="Open org Code quality settings">↗</a>` : ""}
           </div>
@@ -351,10 +351,44 @@
     await Promise.all(Array.from({ length: Math.min(CLIENT_CONCURRENCY, logins.length) }, worker));
   }
 
+  // --- Billing confirmation modal -----------------------------------------------
+
+  let billingConfirmResolve = null;
+
+  function closeBillingConfirm(result) {
+    $("billing-confirm-overlay").classList.add("hidden");
+    if (billingConfirmResolve) {
+      const resolve = billingConfirmResolve;
+      billingConfirmResolve = null;
+      resolve(result);
+    }
+  }
+
+  // Shown before any action that enables Code Quality or AI findings, since both
+  // incur billing (committer licenses, AI credits, Action minutes). Resolves true
+  // if the user confirms, false if they cancel/dismiss.
+  function confirmBillingChange(logins) {
+    const orgCount = logins.length;
+    const repoCount = logins.reduce((sum, login) => {
+      const org = orgByLogin(login);
+      return sum + (org && org.repoCount != null ? org.repoCount : 0);
+    }, 0);
+    const repoLabel = repoCount === 1 ? "1 repository" : `${repoCount.toLocaleString()} repositories`;
+    const scopeLabel = orgCount === 1 ? "this organization" : `${orgCount} organizations`;
+    $("billing-confirm-summary").textContent =
+      `Enabling across ${repoLabel} in ${scopeLabel} will incur additional costs based on:`;
+    $("billing-confirm-overlay").classList.remove("hidden");
+    return new Promise((resolve) => { billingConfirmResolve = resolve; });
+  }
+
   // --- Enable/disable ---------------------------------------------------------
 
   async function toggleOrgs(logins, enable, filter, target = "quality") {
     if (!logins.length) return;
+    if (enable) {
+      const confirmed = await confirmBillingChange(logins);
+      if (!confirmed) return;
+    }
     for (const login of logins) {
       const org = orgByLogin(login);
       if (!org) continue;
@@ -697,6 +731,13 @@
   $("filter-panel-close").addEventListener("click", closeFilterPanel);
   $("filter-enable-btn").addEventListener("click", () => applyFilter(true));
   $("filter-disable-btn").addEventListener("click", () => applyFilter(false));
+
+  $("billing-confirm-close").addEventListener("click", () => closeBillingConfirm(false));
+  $("billing-confirm-cancel").addEventListener("click", () => closeBillingConfirm(false));
+  $("billing-confirm-confirm").addEventListener("click", () => closeBillingConfirm(true));
+  $("billing-confirm-overlay").addEventListener("click", (e) => {
+    if (e.target.id === "billing-confirm-overlay") closeBillingConfirm(false);
+  });
 
   $("mode-auto-btn").addEventListener("click", () => setAuthMode("auto"));
   $("mode-env-btn").addEventListener("click", () => setAuthMode("env"));

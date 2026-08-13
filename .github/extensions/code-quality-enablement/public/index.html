@@ -83,6 +83,27 @@
     </div>
   </section>
 
+  <div id="billing-confirm-overlay" class="modal-overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="billing-confirm-title">
+      <div class="modal-header">
+        <strong id="billing-confirm-title">Review enablement and billing changes</strong>
+        <button id="billing-confirm-close" class="btn small" type="button" aria-label="Close">✕</button>
+      </div>
+      <p id="billing-confirm-summary" class="modal-summary"></p>
+      <div class="billing-table">
+        <div class="billing-row"><span>Licenses and usage</span><strong>$10 per active committer/month</strong></div>
+        <div class="billing-row"><span>AI credits usage*</span><strong>Based on usage</strong></div>
+        <div class="billing-row"><span>Action minutes consumed*</span><strong>Based on usage</strong></div>
+      </div>
+      <p class="hint">*Code Quality scans your pull requests and default branch, using a mix of deterministic and AI scans.
+        <a href="https://docs.github.com/billing/concepts/product-billing/github-code-quality" target="_blank" rel="noreferrer">Learn more about our billing model</a></p>
+      <div class="modal-actions">
+        <button id="billing-confirm-cancel" class="btn" type="button">Cancel</button>
+        <button id="billing-confirm-confirm" class="btn success" type="button">Confirm</button>
+      </div>
+    </div>
+  </div>
+
   <section id="empty-state" class="empty-state">
     <p>Enter an enterprise slug above and click <strong>Load organizations</strong> to get started.</p>
     <p class="hint">Code Quality has no org-level API yet, so toggling an org here applies the repo-level
