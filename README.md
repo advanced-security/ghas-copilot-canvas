@@ -114,6 +114,44 @@ It understands the full **unpublished -> dry run -> publish -> push protection**
 
 ---
 
+### 4. 🧪 Code Quality Enablement
+
+> `.github/extensions/code-quality-enablement/`
+
+Bulk enable/disable [GitHub Code Quality](https://docs.github.com/en/code-security/how-tos/maintain-quality-code/enable-code-quality) (and its AI findings) across **every organization in an enterprise**. Code Quality has no org-level API, so per-org actions apply the repo-level `code-quality/setup` API across every repo in that org in the background — orgs can hold 10k+ repos, so per-repo detail is intentionally left out of the table in favor of org-level rollups.
+
+#### Highlights
+
+- **Enterprise-wide table** — load every org in an enterprise, with a live-checkable, sampled Code Quality / AI-findings status per org.
+- **Bulk or per-row control** — select orgs with checkboxes and apply an action to all of them, or use the per-row dropdown for a single org.
+- **Repository access modes** — mirrors GitHub's own `code-quality/setup` options: All repositories, No repositories, or Matching a filter (name/language/topic); "Selected repositories" is intentionally disabled since there's no bulk API for it.
+- **AI findings, separately** — a dedicated AI-scans toggle, with accurate "on / off / n/a (not eligible)" states so repos without a CodeQL-supported language aren't misreported as failed.
+- **Billing confirmation** — enabling Code Quality or AI findings first shows a confirmation modal (mirroring GitHub's own billing dialog) with the affected repo/org count and a link to the [billing docs](https://docs.github.com/billing/concepts/product-billing/github-code-quality).
+- **Resilient bulk jobs** — background job queue with retries, rate-limit backoff, and per-repo outcome classification (succeeded / not-eligible / policy-blocked / requires-quality-scan / error) surfaced back into the table.
+- **Live diagnostics panel** — tails every `gh api` call made by the extension for troubleshooting at scale.
+
+#### Actions
+
+| Action | Input | Description |
+|---|---|---|
+| `bulk-toggle` (HTTP API) | `orgs`, `enable`, `filter`, `target` | Queue a background job to enable/disable Code Quality or AI findings across the given orgs |
+
+#### Usage
+
+Ask Copilot to open the canvas:
+
+```
+Open the Code Quality Enablement canvas for my-enterprise
+```
+
+The canvas lets you:
+- **Load organizations** — list every org in an enterprise slug
+- **Check status** — sample repos per org to estimate current Code Quality / AI-findings state
+- **Select and apply** — checkbox-select orgs, then Enable all / Disable all / Matching a filter
+- **Track progress** — live per-org job progress and outcome breakdown as bulk changes roll out
+
+---
+
 ## Prerequisites
 
 All extensions require:
@@ -136,7 +174,7 @@ cd ghas-copilot-canvas
 # open a Copilot CLI session in this directory
 ```
 
-All three canvases will be available immediately.
+All four canvases will be available immediately.
 
 ---
 
@@ -154,16 +192,23 @@ All three canvases will be available immediately.
 │       └── styles.css
 ├── sbom-dependency-audit/
 │   └── extension.mjs        # Canvas + SBOM scanning logic
-└── ghsp-custom-pattern-deployment/
-    ├── extension.mjs        # Canvas + loopback HTTP server / API endpoints
-    ├── gh.mjs               # gh api wrapper (auth fallback, pagination)
-    ├── patterns.mjs         # patterns.yml discovery + normalization
-    ├── scope.mjs            # scope paths, deep links, list/deploy ops
-    ├── ui.mjs               # Iframe HTML renderer
-    ├── index.html           # UI layout + styling
-    ├── app.js               # Frontend logic
-    ├── js-yaml.mjs          # Vendored YAML parser
-    └── README.md
+├── ghsp-custom-pattern-deployment/
+│   ├── extension.mjs        # Canvas + loopback HTTP server / API endpoints
+│   ├── gh.mjs               # gh api wrapper (auth fallback, pagination)
+│   ├── patterns.mjs         # patterns.yml discovery + normalization
+│   ├── scope.mjs            # scope paths, deep links, list/deploy ops
+│   ├── ui.mjs               # Iframe HTML renderer
+│   ├── index.html           # UI layout + styling
+│   ├── app.js               # Frontend logic
+│   ├── js-yaml.mjs          # Vendored YAML parser
+│   └── README.md
+└── code-quality-enablement/
+    ├── extension.mjs        # Canvas + loopback HTTP server / bulk job orchestration
+    ├── diagnostics.mjs      # gh api call log tail for the diagnostics panel
+    └── public/
+        ├── index.html       # Iframe UI
+        ├── app.js
+        └── styles.css
 ```
 
 ---
