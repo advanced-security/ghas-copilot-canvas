@@ -1,0 +1,7 @@
+{
+  // Repo-wide markdownlint config, auto-discovered by the CI "Markdown Lint"
+  // workflow (markdownlint-cli), which runs with `--disable MD013` (line
+  // length isn't enforced) but otherwise uses defaults plus these overrides.
+  "MD024": { "siblings_only": true }, // repeated "Actions"/"Usage" headings are fine across different sections
+  "MD033": false // READMEs intentionally use sized <img> tags for screenshots
+}

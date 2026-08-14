@@ -15,7 +15,7 @@ A form-driven builder for **CodeQL configuration YAML files** (`.github/codeql/c
 #### What you can build
 
 | Field | Details |
-|---|---|
+| --- | --- |
 | `name` | Free-text name for the config |
 | `disable-default-queries` | Toggle the built-in query suite |
 | `threat-models` | Dropdown: `remote` / `local` |
@@ -27,7 +27,7 @@ A form-driven builder for **CodeQL configuration YAML files** (`.github/codeql/c
 #### Actions
 
 | Action | Required input | Description |
-|---|---|---|
+| --- | --- | --- |
 | `load_config` | `owner`, `repo` | Fetch the existing config from a repo |
 | `write_codeql_config` | `owner`, `repo`, `yamlContent` | Commit the YAML to the repo |
 
@@ -37,17 +37,18 @@ Both actions accept optional `branch` and `path` parameters.
 
 Ask Copilot to open the canvas:
 
-```
+```text
 Open the CodeQL Config Builder for owner/my-repo
 ```
 
 Or trigger it directly for a specific repo:
 
-```
+```text
 Build a CodeQL config for github/my-project and commit it
 ```
 
 The canvas lets you:
+
 - **Preview YAML** — live render as you fill the form
 - **Download YAML** — save `codeql-config.yml` locally
 - **Load existing** — pull the current file from GitHub before editing
@@ -63,8 +64,8 @@ Scans all repositories in a **GitHub organization** for a given dependency using
 
 #### Actions
 
-| Action | Input | Description |
-|---|---|---|
+| Action     | Input               | Description                                           |
+|------------|---------------------|-------------------------------------------------------|
 | `run_scan` | `org`, `dependency` | Scan all repos in an org and return a Markdown report |
 
 Both `org` and `dependency` are also accepted as canvas open inputs to pre-fill the form.
@@ -73,23 +74,23 @@ Both `org` and `dependency` are also accepted as canvas open inputs to pre-fill 
 
 Ask Copilot to open the canvas:
 
-```
+```text
 Audit adrienpessu-octodemo for @antv/data-set
 ```
 
 Or start a scan via agent action:
 
-```
+```text
 Run an SBOM scan on my-org for lodash
 ```
 
 The canvas displays a live table of every repository that contains the dependency, along with:
+
 - **Version** found
 - **Direct or transitive** classification
 - **Dependency path** from root to the package
 
 <img width="2876" height="1434" alt="image" src="https://github.com/user-attachments/assets/e7d64e14-ec38-4e31-81cd-045294d8e1a0" />
-
 
 ---
 
@@ -111,6 +112,45 @@ Bulk-deploys **secret-scanning custom patterns** to an **enterprise, organizatio
 It understands the full **unpublished -> dry run -> publish -> push protection** lifecycle and links you to where each UI-only step happens, rather than pretending the API can do it. See the [extension README](.github/extensions/ghsp-custom-pattern-deployment/README.md) for full details and the known API/UI limitations.
 
 <img width="1142" height="993" alt="image" src="https://github.com/user-attachments/assets/2e33a413-e52c-4b99-a308-a55154b23b53" />
+
+---
+
+### 4. 🧪 Code Quality Enablement
+
+> `.github/extensions/code-quality-enablement/`
+
+Bulk enable/disable [GitHub Code Quality](https://docs.github.com/en/code-security/how-tos/maintain-quality-code/enable-code-quality) (and its AI findings) across **every organization in an enterprise**. Code Quality has no org-level API, so per-org actions apply the repo-level `code-quality/setup` API across every repo in that org in the background — orgs can hold 10k+ repos, so per-repo detail is intentionally left out of the table in favor of org-level rollups.
+
+#### Highlights
+
+- **Enterprise-wide table** — load every org in an enterprise, with a live-checkable, sampled Code Quality / AI-findings status per org.
+- **Bulk or per-row control** — select orgs with checkboxes and apply an action to all of them, or use the per-row dropdown for a single org.
+- **Repository access modes** — mirrors GitHub's own `code-quality/setup` options: All repositories, No repositories, or Matching a filter (name/language/topic); "Selected repositories" is intentionally disabled since there's no bulk API for it.
+- **AI findings, separately** — a dedicated AI-scans toggle, with accurate "on / off / n/a (not eligible)" states so repos without a CodeQL-supported language aren't misreported as failed.
+- **Billing confirmation** — enabling Code Quality or AI findings first shows a confirmation modal (mirroring GitHub's own billing dialog) with the affected repo/org count and a link to the [billing docs](https://docs.github.com/billing/concepts/product-billing/github-code-quality).
+- **Resilient bulk jobs** — background job queue with retries, rate-limit backoff, and per-repo outcome classification (succeeded / not-eligible / policy-blocked / requires-quality-scan / error) surfaced back into the table.
+- **Live diagnostics panel** — tails every `gh api` call made by the extension for troubleshooting at scale.
+
+#### Actions
+
+| Action                   | Input                                | Description                                                                                |
+|--------------------------|--------------------------------------|--------------------------------------------------------------------------------------------|
+| `bulk-toggle` (HTTP API) | `orgs`, `enable`, `filter`, `target` | Queue a background job to enable/disable Code Quality or AI findings across the given orgs |
+
+#### Usage
+
+Ask Copilot to open the canvas:
+
+```text
+Open the Code Quality Enablement canvas for my-enterprise
+```
+
+The canvas lets you:
+
+- **Load organizations** — list every org in an enterprise slug
+- **Check status** — sample repos per org to estimate current Code Quality / AI-findings state
+- **Select and apply** — checkbox-select orgs, then Enable all / Disable all / Matching a filter
+- **Track progress** — live per-org job progress and outcome breakdown as bulk changes roll out
 
 ---
 
@@ -136,13 +176,13 @@ cd ghas-copilot-canvas
 # open a Copilot CLI session in this directory
 ```
 
-All three canvases will be available immediately.
+All four canvases will be available immediately.
 
 ---
 
 ## Repository structure
 
-```
+```text
 .github/extensions/
 ├── codeql-config-builder/
 │   ├── package.json
@@ -154,16 +194,23 @@ All three canvases will be available immediately.
 │       └── styles.css
 ├── sbom-dependency-audit/
 │   └── extension.mjs        # Canvas + SBOM scanning logic
-└── ghsp-custom-pattern-deployment/
-    ├── extension.mjs        # Canvas + loopback HTTP server / API endpoints
-    ├── gh.mjs               # gh api wrapper (auth fallback, pagination)
-    ├── patterns.mjs         # patterns.yml discovery + normalization
-    ├── scope.mjs            # scope paths, deep links, list/deploy ops
-    ├── ui.mjs               # Iframe HTML renderer
-    ├── index.html           # UI layout + styling
-    ├── app.js               # Frontend logic
-    ├── js-yaml.mjs          # Vendored YAML parser
-    └── README.md
+├── ghsp-custom-pattern-deployment/
+│   ├── extension.mjs        # Canvas + loopback HTTP server / API endpoints
+│   ├── gh.mjs               # gh api wrapper (auth fallback, pagination)
+│   ├── patterns.mjs         # patterns.yml discovery + normalization
+│   ├── scope.mjs            # scope paths, deep links, list/deploy ops
+│   ├── ui.mjs               # Iframe HTML renderer
+│   ├── index.html           # UI layout + styling
+│   ├── app.js               # Frontend logic
+│   ├── js-yaml.mjs          # Vendored YAML parser
+│   └── README.md
+└── code-quality-enablement/
+    ├── extension.mjs        # Canvas + loopback HTTP server / bulk job orchestration
+    ├── diagnostics.mjs      # gh api call log tail for the diagnostics panel
+    └── public/
+        ├── index.html       # Iframe UI
+        ├── app.js
+        └── styles.css
 ```
 
 ---
