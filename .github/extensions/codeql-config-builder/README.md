@@ -32,13 +32,13 @@ The form covers every documented CodeQL config field:
 ## Agent-facing actions
 
 | Action | Input | Description |
-|---|---|---|
+| --- | --- | --- |
 | `load_config` | `{ owner, repo, branch?, path? }` | Read an existing CodeQL config from a repo. |
 | `write_codeql_config` | `{ owner, repo, branch?, path?, yamlContent, message? }` | Commit a CodeQL config YAML. |
 
 ## Files
 
-```
+```text
 .github/extensions/codeql-config-builder/
 ├── package.json
 ├── extension.mjs      # canvas + loopback HTTP server (uses `gh api`)

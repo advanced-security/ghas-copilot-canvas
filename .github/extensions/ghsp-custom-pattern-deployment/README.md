@@ -36,7 +36,7 @@ It exists because deploying these patterns through the GitHub UI one at a time i
 
 Ask Copilot to open the canvas:
 
-```
+```text
 Open the secret scanning custom pattern deployment canvas
 ```
 
@@ -65,7 +65,7 @@ These are constraints of the underlying API (or gaps in this canvas's UI), not b
 ## Files
 
 | File | Purpose |
-|---|---|
+| --- | --- |
 | `extension.mjs` | Canvas registration + loopback HTTP server and API endpoints |
 | `gh.mjs` | `gh api` wrapper (auth fallback, pagination, raw file fetch) |
 | `patterns.mjs` | Remote/local discovery and normalization of `patterns.yml` |
