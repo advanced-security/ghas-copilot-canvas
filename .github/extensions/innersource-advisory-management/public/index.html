@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Innersource Advisory Management</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 16 16" width="18" height="18"><path fill="currentColor" d="M8 0c.69 0 1.35.28 1.84.77l5.39 5.4c.49.48.77 1.14.77 1.83 0 .69-.28 1.35-.77 1.84l-5.39 5.39A2.6 2.6 0 0 1 8 16a2.6 2.6 0 0 1-1.84-.77L.77 9.84A2.6 2.6 0 0 1 0 8c0-.69.28-1.35.77-1.83L6.16.77A2.6 2.6 0 0 1 8 0Zm0 1.5c-.29 0-.57.12-.78.32L1.83 7.23a1.1 1.1 0 0 0 0 1.54l5.39 5.4a1.1 1.1 0 0 0 1.56 0l5.39-5.4a1.1 1.1 0 0 0 0-1.54l-5.39-5.4A1.1 1.1 0 0 0 8 1.5Zm-.75 3h1.5v4.25h-1.5V4.5Zm0 5.5h1.5v1.5h-1.5V10Z"/></svg>
+        </span>
+        <div>
+          <strong>Innersource Advisory Management</strong>
+          <span class="subtitle">Create, copy, update, and withdraw GHIS advisories</span>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <label class="preview-feature-toggle" title="Show private preview deployment controls">
+          <span class="preview-toggle-label">Enable preview features</span>
+          <input
+            id="previewFeatures"
+            type="checkbox"
+            role="switch"
+            aria-label="Enable preview features"
+            aria-controls="organizationTargetOption"
+          />
+          <span class="preview-toggle-track" aria-hidden="true"></span>
+        </label>
+        <details class="auth-details" id="authDetails">
+          <summary>
+            <span class="session-status" id="sessionStatus">Checking GitHub authentication...</span>
+            <span class="info-bubble" aria-label="Authentication details">i</span>
+          </summary>
+          <div class="auth-popover" id="authPopover">
+            <p class="muted">Loading credential details...</p>
+          </div>
+        </details>
+      </div>
+    </header>
+
+    <main>
+      <div class="notice">
+        <div>
+          <strong>Advisory loading and enterprise deployment are GA.</strong>
+          Organization deployment is a private preview feature available only to enabled organizations; its controls remain hidden until preview features are enabled.
+        </div>
+        <a href="https://docs.github.com/en/enterprise-cloud@latest/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/manage-innersource-advisories" target="_blank" rel="noopener">View documentation</a>
+      </div>
+
+      <section class="scope-grid">
+        <article class="card scope-card">
+          <div class="card-heading">
+            <div>
+              <span class="step">1</span>
+              <h2>Advisory source</h2>
+            </div>
+            <div class="heading-badges">
+              <span class="status-chip success" id="sourceMode">GA</span>
+              <span class="status-chip neutral" id="sourceCount">Not loaded</span>
+            </div>
+          </div>
+          <p class="muted">Read existing advisories with your current <code>gh</code> login.</p>
+          <div class="segmented" id="sourceType">
+            <button type="button" data-value="enterprise" class="active">Enterprise</button>
+            <button type="button" data-value="organization">Organization</button>
+          </div>
+          <label class="field">
+            <span id="sourceSlugLabel">Enterprise slug</span>
+            <input id="sourceSlug" type="text" placeholder="octo-enterprise" autocomplete="off" spellcheck="false" />
+          </label>
+          <button class="button primary wide" type="button" id="loadSource">Load advisories</button>
+          <div class="inline-message" id="sourceMessage"></div>
+        </article>
+
+        <article class="card scope-card">
+          <div class="card-heading">
+            <div>
+              <span class="step">2</span>
+              <h2>Deployment target</h2>
+            </div>
+            <span class="status-chip success" id="targetMode">GA</span>
+          </div>
+          <p class="muted">The target is independent from the source, so advisories can move across scopes.</p>
+          <div class="segmented" id="targetType">
+            <button type="button" data-value="enterprise" class="active">Enterprise</button>
+            <button class="hidden" id="organizationTargetOption" type="button" data-value="organization">Organization <span class="preview-label">Private preview</span></button>
+          </div>
+          <label class="field">
+            <span id="targetSlugLabel">Enterprise slug</span>
+            <input id="targetSlug" type="text" placeholder="octo-enterprise" autocomplete="off" spellcheck="false" />
+          </label>
+          <label class="field">
+            <span>GitHub App installation token <span class="optional">(paste manually; not stored)</span></span>
+            <input id="deployToken" type="password" placeholder="Uses GH_INNERSOURCE_TOKEN when blank" autocomplete="off" />
+          </label>
+          <details class="credential-generator" open>
+            <summary>Generate an installation token</summary>
+            <p class="muted">Uses the App ID and selected PEM private key locally. The key and generated token are held only in memory.</p>
+            <div class="form-grid two">
+              <label class="field">
+                <span>App ID or client ID</span>
+                <input id="appIdentifier" type="text" placeholder="123456 or Iv23li..." autocomplete="off" spellcheck="false" />
+              </label>
+              <label class="field">
+                <span>Installation ID <span class="optional">(optional)</span></span>
+                <input id="installationId" type="text" inputmode="numeric" placeholder="Auto-detect from target" autocomplete="off" />
+              </label>
+            </div>
+            <label class="field">
+              <span>Private key (.pem)</span>
+              <input id="appPrivateKey" type="file" accept=".pem,application/x-pem-file,text/plain" />
+              <small id="privateKeyHint">Select the private key downloaded from the GitHub App settings page.</small>
+            </label>
+            <div class="button-group">
+              <button class="button primary" type="button" id="generateDeployToken">Generate token</button>
+              <button class="button secondary hidden" type="button" id="clearGeneratedToken">Clear generated token</button>
+              <a class="button secondary" href="https://docs.github.com/en/enterprise-cloud@latest/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app" target="_blank" rel="noopener">Token documentation</a>
+            </div>
+            <div class="inline-message credential-message" id="credentialMessage"></div>
+          </details>
+          <div class="inline-message" id="targetMessage"></div>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <aside class="card browser-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Advisories</h2>
+              <span class="muted" id="sourceSummary">Choose a source scope</span>
+            </div>
+            <button class="icon-button" type="button" id="newAdvisory" title="Create a new advisory" aria-label="Create a new advisory">+</button>
+          </div>
+          <label class="search">
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M10.5 6.5a4 4 0 1 0-8 0 4 4 0 0 0 8 0Zm-.72 4.34a5.5 5.5 0 1 1 1.06-1.06l3.69 3.69-1.06 1.06-3.69-3.69Z"/></svg>
+            <input id="advisorySearch" type="search" placeholder="Filter by ID, summary, or package" />
+          </label>
+          <div class="filter-row">
+            <select id="severityFilter" aria-label="Filter by severity">
+              <option value="">All severities</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="moderate">Moderate</option>
+              <option value="low">Low</option>
+            </select>
+            <label><input id="includeWithdrawn" type="checkbox" /> Withdrawn</label>
+          </div>
+          <div class="advisory-list" id="advisoryList">
+            <div class="empty-list">
+              <strong>No advisories loaded</strong>
+              <span>Load a source or create a new advisory.</span>
+            </div>
+          </div>
+        </aside>
+
+        <article class="card editor-panel">
+          <div class="editor-header">
+            <div>
+              <div class="editor-title-row">
+                <h1 id="editorTitle">New innersource advisory</h1>
+                <span class="severity-badge unknown" id="severityBadge">Unknown</span>
+              </div>
+              <div class="muted" id="editorSubtitle">Draft an OSV 1.4 advisory for GitHub Dependabot.</div>
+            </div>
+            <a class="button secondary hidden" id="advisoryLink" target="_blank" rel="noopener">Open on GitHub</a>
+          </div>
+
+          <nav class="tabs" aria-label="Advisory sections">
+            <button type="button" class="active" data-tab="details">Details</button>
+            <button type="button" data-tab="cvss">CVSS</button>
+            <button type="button" data-tab="affected">Affected products <span class="count" id="affectedCount">1</span></button>
+            <button type="button" data-tab="references">References <span class="count" id="referenceCount">0</span></button>
+            <button type="button" data-tab="json">OSV JSON</button>
+          </nav>
+
+          <form id="advisoryForm" autocomplete="off">
+            <section class="tab-panel active" data-panel="details">
+              <div class="form-grid two">
+                <label class="field">
+                  <span>Advisory ID <span class="required">*</span></span>
+                  <input id="advisoryId" type="text" placeholder="INTERNAL-2026-001" required />
+                  <small>Stable external identifier. Replace a loaded GitHub-assigned GHIS ID before syncing a copy.</small>
+                </label>
+                <label class="field">
+                  <span>CVE alias</span>
+                  <input id="aliases" type="text" placeholder="CVE-2026-12345" />
+                  <small>Separate multiple CVEs with commas. Other alias types are ignored by GitHub.</small>
+                </label>
+              </div>
+              <label class="field">
+                <span>Summary <span class="required">*</span></span>
+                <input id="summary" type="text" maxlength="1024" placeholder="Improper input validation in internal-package" required />
+                <small><span id="summaryLength">0</span> / 1,024 bytes</small>
+              </label>
+              <label class="field">
+                <span>Description</span>
+                <textarea id="details" rows="12" placeholder="Describe the vulnerability, impact, workarounds, and remediation guidance. Markdown is supported by GitHub."></textarea>
+              </label>
+              <div class="form-grid two">
+                <label class="field">
+                  <span>Published</span>
+                  <input id="published" type="datetime-local" />
+                </label>
+                <label class="field">
+                  <span>Withdrawn</span>
+                  <div class="compound-field">
+                    <label class="check"><input id="withdrawnEnabled" type="checkbox" /> Withdraw advisory</label>
+                    <input id="withdrawn" type="datetime-local" disabled />
+                  </div>
+                </label>
+              </div>
+            </section>
+
+            <section class="tab-panel" data-panel="cvss">
+              <div class="section-heading">
+                <div>
+                  <h3>CVSS 3.1 calculator</h3>
+                  <p class="muted">Choose every base metric to generate the required vector and severity.</p>
+                </div>
+                <div class="score-card">
+                  <strong id="cvssScore">--</strong>
+                  <span id="cvssSeverity">Unknown</span>
+                </div>
+              </div>
+              <div class="metric-grid" id="cvssMetrics">
+                <fieldset data-metric="AV"><legend>Attack vector (AV)</legend><label><input type="radio" name="AV" value="N" /> Network</label><label><input type="radio" name="AV" value="A" /> Adjacent</label><label><input type="radio" name="AV" value="L" /> Local</label><label><input type="radio" name="AV" value="P" /> Physical</label></fieldset>
+                <fieldset data-metric="AC"><legend>Attack complexity (AC)</legend><label><input type="radio" name="AC" value="L" /> Low</label><label><input type="radio" name="AC" value="H" /> High</label></fieldset>
+                <fieldset data-metric="PR"><legend>Privileges required (PR)</legend><label><input type="radio" name="PR" value="N" /> None</label><label><input type="radio" name="PR" value="L" /> Low</label><label><input type="radio" name="PR" value="H" /> High</label></fieldset>
+                <fieldset data-metric="UI"><legend>User interaction (UI)</legend><label><input type="radio" name="UI" value="N" /> None</label><label><input type="radio" name="UI" value="R" /> Required</label></fieldset>
+                <fieldset data-metric="S"><legend>Scope (S)</legend><label><input type="radio" name="S" value="U" /> Unchanged</label><label><input type="radio" name="S" value="C" /> Changed</label></fieldset>
+                <fieldset data-metric="C"><legend>Confidentiality (C)</legend><label><input type="radio" name="C" value="H" /> High</label><label><input type="radio" name="C" value="L" /> Low</label><label><input type="radio" name="C" value="N" /> None</label></fieldset>
+                <fieldset data-metric="I"><legend>Integrity (I)</legend><label><input type="radio" name="I" value="H" /> High</label><label><input type="radio" name="I" value="L" /> Low</label><label><input type="radio" name="I" value="N" /> None</label></fieldset>
+                <fieldset data-metric="A"><legend>Availability (A)</legend><label><input type="radio" name="A" value="H" /> High</label><label><input type="radio" name="A" value="L" /> Low</label><label><input type="radio" name="A" value="N" /> None</label></fieldset>
+              </div>
+              <label class="field">
+                <span>CVSS 3.1 vector <span class="required">*</span></span>
+                <input id="cvssV3" type="text" placeholder="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H" />
+                <small>You can paste a vector or build one with the calculator.</small>
+              </label>
+              <label class="field">
+                <span>CVSS 4.0 vector <span class="optional">(optional)</span></span>
+                <input id="cvssV4" type="text" placeholder="CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N" />
+              </label>
+            </section>
+
+            <section class="tab-panel" data-panel="affected">
+              <div class="section-heading">
+                <div>
+                  <h3>Affected products</h3>
+                  <p class="muted">Define package ecosystems and vulnerable version ranges.</p>
+                </div>
+                <button class="button secondary" type="button" id="addAffected">Add affected product</button>
+              </div>
+              <div class="repeater" id="affectedList"></div>
+            </section>
+
+            <section class="tab-panel" data-panel="references">
+              <div class="section-heading">
+                <div>
+                  <h3>References</h3>
+                  <p class="muted">Link internal reports, fixes, packages, or supporting material.</p>
+                </div>
+                <button class="button secondary" type="button" id="addReference">Add reference</button>
+              </div>
+              <div class="repeater" id="referenceList"></div>
+            </section>
+
+            <section class="tab-panel" data-panel="json">
+              <div class="section-heading">
+                <div>
+                  <h3>OSV 1.4 JSON</h3>
+                  <p class="muted">Review, copy, download, or import the exact sync payload.</p>
+                </div>
+                <div class="button-group">
+                  <button
+                    class="button secondary"
+                    type="button"
+                    id="loadDocsSample"
+                    title="Load the minimal OSV example from GitHub Docs"
+                  >Load docs sample</button>
+                  <button class="button secondary" type="button" id="refreshJson">Refresh</button>
+                  <button class="button secondary" type="button" id="copyJson">Copy</button>
+                  <button class="button secondary" type="button" id="applyJson">Apply JSON</button>
+                </div>
+              </div>
+              <textarea id="jsonPreview" class="json-editor" rows="28" spellcheck="false"></textarea>
+            </section>
+          </form>
+
+          <div class="validation-panel hidden" id="validationPanel">
+            <strong id="validationTitle"></strong>
+            <ul id="validationMessages"></ul>
+          </div>
+
+          <footer class="editor-actions">
+            <div class="button-group">
+              <button class="button secondary" type="button" id="validateAdvisory">Validate</button>
+              <button class="button secondary" type="button" id="downloadJson">Download JSON</button>
+            </div>
+            <div class="deploy-summary">
+              <span id="deploySummary">Choose a deployment target</span>
+              <button class="button deploy" type="button" id="deployAdvisory">Deploy advisory</button>
+            </div>
+          </footer>
+        </article>
+      </section>
+
+      <details class="card diagnostic-panel" id="diagnosticPanel">
+        <summary>
+          <span class="diagnostic-title">
+            <strong>API activity</strong>
+            <span>Redacted request, response, and debug log</span>
+          </span>
+          <span class="status-chip neutral" id="diagnosticCount">0 entries</span>
+        </summary>
+        <div class="diagnostic-body">
+          <div class="diagnostic-toolbar">
+            <p id="diagnosticHint">Held only in memory for this canvas. Credentials are redacted and large bodies are truncated.</p>
+            <div class="button-group">
+              <button class="button secondary" type="button" id="refreshDiagnostics">Refresh</button>
+              <button class="button secondary" type="button" id="copyLatestResponse">Copy latest response</button>
+              <button class="button secondary" type="button" id="copyDiagnostics">Copy all</button>
+              <button class="button secondary" type="button" id="clearDiagnostics">Clear</button>
+            </div>
+          </div>
+          <div class="diagnostic-list" id="diagnosticList" role="log" aria-live="polite">
+            <div class="empty-list">
+              <strong>No API activity yet</strong>
+              <span>Requests will appear here as you use the canvas.</span>
+            </div>
+          </div>
+        </div>
+      </details>
+    </main>
+
+    <template id="affectedTemplate">
+      <div class="repeater-item affected-item">
+        <div class="repeater-header">
+          <strong>Affected product <span data-index></span></strong>
+          <button class="danger-link" type="button" data-remove>Remove</button>
+        </div>
+        <div class="form-grid three">
+          <label class="field"><span>Ecosystem</span><select data-field="ecosystem"></select></label>
+          <label class="field span-two"><span>Package name</span><input data-field="name" type="text" placeholder="@company/internal-package" /></label>
+        </div>
+        <div class="range-mode">
+          <label><input type="radio" data-field="mode" value="range" checked /> Version range</label>
+          <label><input type="radio" data-field="mode" value="versions" /> Exact versions</label>
+        </div>
+        <div data-range-fields class="form-grid four">
+          <label class="field"><span>Range type</span><select data-field="rangeType"><option>ECOSYSTEM</option><option>SEMVER</option></select></label>
+          <label class="field"><span>Introduced</span><input data-field="introduced" type="text" placeholder="0" /></label>
+          <label class="field"><span>Upper bound</span><select data-field="upperKind"><option value="fixed">Fixed</option><option value="last_affected">Last affected</option><option value="">No upper bound</option></select></label>
+          <label class="field"><span>Version</span><input data-field="upperVersion" type="text" placeholder="1.2.3" /></label>
+        </div>
+        <label class="field hidden" data-version-fields><span>Exact versions</span><input data-field="versions" type="text" placeholder="1.0.0, 1.0.1" /><small>Separate versions with commas.</small></label>
+      </div>
+    </template>
+
+    <template id="referenceTemplate">
+      <div class="repeater-item reference-item">
+        <select data-field="type"><option>ADVISORY</option><option>WEB</option><option>FIX</option><option>ARTICLE</option><option>REPORT</option><option>PACKAGE</option><option>EVIDENCE</option></select>
+        <input data-field="url" type="url" placeholder="https://github.example.com/security/advisories/123" />
+        <button class="danger-link" type="button" data-remove>Remove</button>
+      </div>
+    </template>
+
+    <div class="toast hidden" id="toast" role="status"></div>
+    <div class="modal-backdrop hidden" id="deployModal">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="deployModalTitle">
+        <h2 id="deployModalTitle">Deploy innersource advisory</h2>
+        <div id="deployModalBody"></div>
+        <div class="modal-actions">
+          <button class="button secondary" type="button" id="cancelDeploy">Cancel</button>
+          <button class="button deploy" type="button" id="confirmDeploy">Deploy</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

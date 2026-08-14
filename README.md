@@ -114,6 +114,26 @@ It understands the full **unpublished -> dry run -> publish -> push protection**
 
 ---
 
+### 4. Innersource Advisory Management
+
+> `.github/extensions/innersource-advisory-management/`
+
+A GitHub-style OSV editor for **creating, copying, updating, and withdrawing innersource advisories**. It loads existing GHIS advisories through GraphQL, provides a CVSS 3.1 calculator, validates GitHub-specific OSV constraints, and deploys through the asynchronous innersource vulnerability sync API.
+
+#### Highlights
+
+- **Independent source and target scopes** - load from one organization or enterprise and deploy to another supported scope.
+- **Advisory browser** - search and filter GHIS advisories, then inspect their packages and vulnerable ranges.
+- **Complete OSV workflow** - edit details, CVE aliases, affected products, ranges, references, publication dates, and withdrawal state.
+- **CVSS calculator** - build a CVSS 3.1 vector and calculate its base score and qualitative severity.
+- **Safe deployment** - generate a one-hour installation token from a locally selected App private key, validate before submission, and poll GitHub's async sync job to completion.
+- **Inspectable API activity** - expand a redacted, in-memory tail of GraphQL, REST, and GitHub App requests and responses, including GitHub request IDs.
+- **Explicit availability** - enterprise and organization loading plus enterprise deployment are GA, while organization deployment is a private preview hidden behind an explicit toggle.
+
+Loading uses the current `gh` user (`read:org` for organization sources and `read:enterprise` for enterprise sources). Deployment requires a GitHub App installation token because the sync API does not support personal access tokens or OAuth tokens. See the [extension README](.github/extensions/innersource-advisory-management/README.md) for permissions and setup.
+
+---
+
 ## Prerequisites
 
 All extensions require:
@@ -136,7 +156,7 @@ cd ghas-copilot-canvas
 # open a Copilot CLI session in this directory
 ```
 
-All three canvases will be available immediately.
+All four canvases will be available immediately.
 
 ---
 
@@ -154,16 +174,26 @@ All three canvases will be available immediately.
 │       └── styles.css
 ├── sbom-dependency-audit/
 │   └── extension.mjs        # Canvas + SBOM scanning logic
-└── ghsp-custom-pattern-deployment/
+├── ghsp-custom-pattern-deployment/
+│   ├── extension.mjs        # Canvas + loopback HTTP server / API endpoints
+│   ├── gh.mjs               # gh api wrapper (auth fallback, pagination)
+│   ├── patterns.mjs         # patterns.yml discovery + normalization
+│   ├── scope.mjs            # scope paths, deep links, list/deploy ops
+│   ├── ui.mjs               # Iframe HTML renderer
+│   ├── index.html           # UI layout + styling
+│   ├── app.js               # Frontend logic
+│   ├── js-yaml.mjs          # Vendored YAML parser
+│   └── README.md
+└── innersource-advisory-management/
     ├── extension.mjs        # Canvas + loopback HTTP server / API endpoints
-    ├── gh.mjs               # gh api wrapper (auth fallback, pagination)
-    ├── patterns.mjs         # patterns.yml discovery + normalization
-    ├── scope.mjs            # scope paths, deep links, list/deploy ops
-    ├── ui.mjs               # Iframe HTML renderer
-    ├── index.html           # UI layout + styling
-    ├── app.js               # Frontend logic
-    ├── js-yaml.mjs          # Vendored YAML parser
-    └── README.md
+    ├── github.mjs           # GraphQL loading + asynchronous sync API
+    ├── advisory.mjs         # OSV conversion, validation, and CVSS logic
+    ├── advisory.test.mjs
+    ├── README.md
+    └── public/
+        ├── index.html
+        ├── app.js
+        └── styles.css
 ```
 
 ---
