@@ -542,7 +542,11 @@
           if (orgJob.status === "done") {
             const notEligible = orgJob.skipped - (orgJob.policyBlocked || 0);
             const allBlocked = orgJob.total > 0 && orgJob.succeeded === 0 && (orgJob.policyBlocked || 0) === orgJob.total;
-            org.status = allBlocked ? "policy-blocked" : (meta.enable ? "enabled" : "disabled");
+            // Mixed outcomes (some repos succeeded but others failed or were skipped
+            // for reasons other than policy) shouldn't be reported as a clean
+            // enabled/disabled state — mirror the AI-target branch's "partial" handling.
+            const mixedOutcome = !allBlocked && orgJob.total > 0 && orgJob.succeeded > 0 && (orgJob.failed > 0 || notEligible > 0);
+            org.status = allBlocked ? "policy-blocked" : mixedOutcome ? "partial" : (meta.enable ? "enabled" : "disabled");
             org.statusDetail = orgJob.failed || orgJob.skipped
               ? { counts: { configured: meta.enable ? orgJob.succeeded : 0, "not-configured": meta.enable ? 0 : orgJob.succeeded, "not-eligible": notEligible, "policy-blocked": orgJob.policyBlocked || 0, error: orgJob.failed }, totalRepos: orgJob.total, sampledRepos: orgJob.total, sampled: false }
               : null;

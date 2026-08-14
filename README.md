@@ -15,7 +15,7 @@ A form-driven builder for **CodeQL configuration YAML files** (`.github/codeql/c
 #### What you can build
 
 | Field | Details |
-|---|---|
+| --- | --- |
 | `name` | Free-text name for the config |
 | `disable-default-queries` | Toggle the built-in query suite |
 | `threat-models` | Dropdown: `remote` / `local` |
@@ -27,7 +27,7 @@ A form-driven builder for **CodeQL configuration YAML files** (`.github/codeql/c
 #### Actions
 
 | Action | Required input | Description |
-|---|---|---|
+| --- | --- | --- |
 | `load_config` | `owner`, `repo` | Fetch the existing config from a repo |
 | `write_codeql_config` | `owner`, `repo`, `yamlContent` | Commit the YAML to the repo |
 
@@ -37,17 +37,18 @@ Both actions accept optional `branch` and `path` parameters.
 
 Ask Copilot to open the canvas:
 
-```
+```text
 Open the CodeQL Config Builder for owner/my-repo
 ```
 
 Or trigger it directly for a specific repo:
 
-```
+```text
 Build a CodeQL config for github/my-project and commit it
 ```
 
 The canvas lets you:
+
 - **Preview YAML** — live render as you fill the form
 - **Download YAML** — save `codeql-config.yml` locally
 - **Load existing** — pull the current file from GitHub before editing
@@ -63,8 +64,8 @@ Scans all repositories in a **GitHub organization** for a given dependency using
 
 #### Actions
 
-| Action | Input | Description |
-|---|---|---|
+| Action     | Input               | Description                                           |
+|------------|---------------------|-------------------------------------------------------|
 | `run_scan` | `org`, `dependency` | Scan all repos in an org and return a Markdown report |
 
 Both `org` and `dependency` are also accepted as canvas open inputs to pre-fill the form.
@@ -73,23 +74,23 @@ Both `org` and `dependency` are also accepted as canvas open inputs to pre-fill 
 
 Ask Copilot to open the canvas:
 
-```
+```text
 Audit adrienpessu-octodemo for @antv/data-set
 ```
 
 Or start a scan via agent action:
 
-```
+```text
 Run an SBOM scan on my-org for lodash
 ```
 
 The canvas displays a live table of every repository that contains the dependency, along with:
+
 - **Version** found
 - **Direct or transitive** classification
 - **Dependency path** from root to the package
 
 <img width="2876" height="1434" alt="image" src="https://github.com/user-attachments/assets/e7d64e14-ec38-4e31-81cd-045294d8e1a0" />
-
 
 ---
 
@@ -132,19 +133,20 @@ Bulk enable/disable [GitHub Code Quality](https://docs.github.com/en/code-securi
 
 #### Actions
 
-| Action | Input | Description |
-|---|---|---|
+| Action                   | Input                                | Description                                                                                |
+|--------------------------|--------------------------------------|--------------------------------------------------------------------------------------------|
 | `bulk-toggle` (HTTP API) | `orgs`, `enable`, `filter`, `target` | Queue a background job to enable/disable Code Quality or AI findings across the given orgs |
 
 #### Usage
 
 Ask Copilot to open the canvas:
 
-```
+```text
 Open the Code Quality Enablement canvas for my-enterprise
 ```
 
 The canvas lets you:
+
 - **Load organizations** — list every org in an enterprise slug
 - **Check status** — sample repos per org to estimate current Code Quality / AI-findings state
 - **Select and apply** — checkbox-select orgs, then Enable all / Disable all / Matching a filter
@@ -180,7 +182,7 @@ All four canvases will be available immediately.
 
 ## Repository structure
 
-```
+```text
 .github/extensions/
 ├── codeql-config-builder/
 │   ├── package.json

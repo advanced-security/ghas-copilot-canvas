@@ -178,6 +178,49 @@ input[type="text"] {
 
 .table-wrap { padding: 0 20px 24px; overflow-x: auto; }
 
+.filter-panel {
+  margin: 0 20px 16px;
+  padding: 14px 16px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.filter-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.filter-panel-header strong { font-size: 13px; }
+.filter-fields {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+.filter-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  flex: 1 1 160px;
+}
+.filter-fields input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  font-size: 13px;
+}
+.filter-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 table { width: 100%; border-collapse: collapse; }
 thead th {
   text-align: left;

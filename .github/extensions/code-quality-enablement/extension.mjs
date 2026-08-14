@@ -334,8 +334,10 @@ async function listEnterpriseOrgs(enterprise, { maxPages = 40 } = {}) {
 
 // --- Repo listing -------------------------------------------------------------
 
-// Streams NDJSON (one JSON object per line) across every page so we never hold
-// a giant concatenated JSON array in memory for huge orgs.
+// Requests NDJSON (one JSON object per line) across every page via `gh api --paginate`,
+// avoiding `jq`-side array wrapping. Note this doesn't avoid buffering per se: `gh` itself
+// accumulates the full paginated response in its own process memory before we read stdout,
+// so extremely large orgs (10k+ repos) still incur a large buffer inside the `gh` subprocess.
 async function listOrgRepos(org, { type = "sources" } = {}) {
   const out = await gh([
     "api", "-X", "GET", "--paginate", `/orgs/${org}/repos`,
@@ -668,14 +670,6 @@ function startServer() {
       const p = url.pathname;
 
       if (p.startsWith("/api/")) {
-        if (req.method === "GET" && p === "/api/whoami") {
-          try {
-            const me = await ghApi("/user");
-            return sendJson(res, 200, { login: me.login, name: me.name });
-          } catch (err) {
-            return sendJson(res, 200, { login: null, error: err.message });
-          }
-        }
         if (req.method === "GET" && p === "/api/auth") {
           return sendJson(res, 200, await getAuthStatus());
         }
