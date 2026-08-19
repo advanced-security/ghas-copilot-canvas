@@ -5,6 +5,7 @@ import {
   createGitHubDocsSampleOsv,
   cvssV3BaseScore,
   graphqlNodesToAdvisories,
+  normalizeScope,
   parseCvssV3Vector,
   validateOsv,
   vulnerableRangeToAffected,
@@ -33,6 +34,17 @@ test("validates a minimal GitHub OSV advisory", () => {
   const result = validateOsv(minimalAdvisory);
   assert.equal(result.valid, true);
   assert.deepEqual(result.errors, []);
+});
+
+test("reports invalid scopes as client errors", () => {
+  assert.throws(
+    () => normalizeScope({ type: "organization", slug: "" }),
+    (error) => error.status === 422 && /slug is required/i.test(error.message),
+  );
+  assert.throws(
+    () => normalizeScope({ type: "repository", slug: "octo-repo" }),
+    (error) => error.status === 422 && /scope type/i.test(error.message),
+  );
 });
 
 test("provides the exact GitHub Docs OSV sample", () => {

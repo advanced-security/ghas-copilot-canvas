@@ -8,6 +8,10 @@ import { generateInstallationAccessToken } from "./app-auth.mjs";
 import { validateOsv } from "./advisory.mjs";
 import { createDiagnosticLog } from "./diagnostics.mjs";
 import {
+  authorizeLoopbackApiRequest,
+  createLoopbackApiToken,
+} from "./loopback-auth.mjs";
+import {
   API_VERSION,
   configuredDeployToken,
   currentUser,
@@ -222,6 +226,7 @@ function errorResponse(response, error) {
 async function startServer(instanceId) {
   const credentialVault = createCredentialVault();
   const diagnosticLog = createDiagnosticLog();
+  const apiToken = createLoopbackApiToken();
   diagnosticLog.add({
     source: "canvas",
     operation: "Diagnostic log initialized",
@@ -233,12 +238,7 @@ async function startServer(instanceId) {
     try {
       url = new URL(request.url, "http://127.0.0.1");
       if (url.pathname.startsWith("/api/")) {
-        const origin = String(request.headers.origin || "");
-        if (origin && origin !== expectedOrigin) {
-          const error = new Error("Cross-origin API requests are not allowed.");
-          error.status = 403;
-          throw error;
-        }
+        authorizeLoopbackApiRequest(request.headers, { apiToken, expectedOrigin });
         return await handleApi(request, response, url, credentialVault, diagnosticLog);
       }
       if (request.method !== "GET") {
@@ -267,7 +267,7 @@ async function startServer(instanceId) {
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
   expectedOrigin = `http://127.0.0.1:${port}`;
-  return { credentialVault, diagnosticLog, instanceId, server, url: `${expectedOrigin}/` };
+  return { apiToken, credentialVault, diagnosticLog, instanceId, server, url: `${expectedOrigin}/` };
 }
 
 const scopeProperties = {
@@ -364,7 +364,7 @@ const canvas = createCanvas({
     return {
       title: "Innersource Advisory Management",
       status: input?.sourceSlug ? `Source: ${input.sourceSlug}` : "Ready",
-      url: `${entry.url}${query ? `?${query}` : ""}`,
+      url: `${entry.url}${query ? `?${query}` : ""}#apiToken=${encodeURIComponent(entry.apiToken)}`,
     };
   },
   async onClose({ instanceId }) {

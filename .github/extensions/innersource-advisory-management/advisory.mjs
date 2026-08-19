@@ -84,13 +84,19 @@ function titleCase(value) {
   return text ? text[0].toUpperCase() + text.slice(1) : "";
 }
 
+function invalidInput(message) {
+  const error = new Error(message);
+  error.status = 422;
+  return error;
+}
+
 export function normalizeScope(scope) {
   const type = scope?.type === "organization" ? "organization" : scope?.type === "enterprise" ? "enterprise" : "";
   const slug = String(scope?.slug || "").trim();
-  if (!type) throw new Error("Scope type must be enterprise or organization.");
-  if (!slug) throw new Error(`${titleCase(type)} slug is required.`);
+  if (!type) throw invalidInput("Scope type must be enterprise or organization.");
+  if (!slug) throw invalidInput(`${titleCase(type)} slug is required.`);
   if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,98}[A-Za-z0-9])?$/.test(slug)) {
-    throw new Error(`${titleCase(type)} slug is not valid.`);
+    throw invalidInput(`${titleCase(type)} slug is not valid.`);
   }
   return { type, slug };
 }

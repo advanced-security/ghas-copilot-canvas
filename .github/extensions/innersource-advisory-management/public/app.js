@@ -8,6 +8,13 @@ import {
   validateOsv,
 } from "/advisory.js";
 
+const fragmentApiToken = new URLSearchParams(location.hash.slice(1)).get("apiToken") || "";
+if (fragmentApiToken) {
+  sessionStorage.setItem("canvasApiToken", fragmentApiToken);
+  history.replaceState(null, "", `${location.pathname}${location.search}`);
+}
+const API_TOKEN = fragmentApiToken || sessionStorage.getItem("canvasApiToken") || "";
+
 const state = {
   sourceType: "enterprise",
   targetType: "enterprise",
@@ -17,6 +24,7 @@ const state = {
   advisories: [],
   selectedGhsaId: null,
   selectedPermalink: null,
+  selectedSourceScope: null,
   jsonDirty: false,
   deployTokenConfigured: false,
   generatedDeployToken: null,
@@ -147,7 +155,6 @@ async function generateDeployToken() {
         scope: target,
       }),
     });
-    $("#deployToken").addEventListener("input", renderAuthContext);
     state.generatedDeployToken = response.credential;
     fileInput.value = "";
     $("#privateKeyHint").textContent = `${file.name} was used in memory and released. Select it again to regenerate.`;
@@ -190,8 +197,12 @@ async function api(path, options = {}) {
   const isDiagnosticRequest = path.startsWith("/api/logs");
   try {
     const response = await fetch(path, {
-      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
       ...options,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Canvas-Api-Token": API_TOKEN,
+        ...(options.headers || {}),
+      },
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok && response.status !== 202) {
@@ -623,6 +634,9 @@ function populateForm(osv, item = null) {
 
   state.selectedGhsaId = item?.ghsaId || null;
   state.selectedPermalink = item?.permalink || null;
+  state.selectedSourceScope = item?.sourceScope
+    ? { type: item.sourceScope.type, slug: item.sourceScope.slug }
+    : null;
   state.jsonDirty = false;
   $("#jsonPreview").value = JSON.stringify(advisory, null, 2);
   $("#advisoryLink").classList.toggle("hidden", !state.selectedPermalink);
@@ -821,8 +835,9 @@ async function openDeployModal() {
     return;
   }
   const advisory = buildOsv({ updateModified: true });
-  const source = currentSource();
+  const source = state.selectedSourceScope;
   const crossScope = state.selectedGhsaId
+    && source
     && (source.type !== target.type || source.slug.toLowerCase() !== target.slug.toLowerCase());
   const operation = advisory.withdrawn ? "withdraw" : crossScope ? "create copy" : state.selectedGhsaId ? "create or update" : "create";
   $("#deployModalBody").innerHTML = `
@@ -914,7 +929,7 @@ function downloadJson() {
   anchor.href = url;
   anchor.download = fileName;
   anchor.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 async function copyJson() {
@@ -945,6 +960,7 @@ function bindEvents() {
     }
   });
   $("#sourceSlug").addEventListener("input", () => { state.sourceSlug = $("#sourceSlug").value.trim(); });
+  $("#deployToken").addEventListener("input", renderAuthContext);
   $("#targetSlug").addEventListener("input", () => {
     state.targetSlug = $("#targetSlug").value.trim();
     renderCredentialState();
