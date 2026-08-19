@@ -23,6 +23,12 @@ A Copilot canvas for managing GitHub innersource security advisories. It provide
 
 Loading existing advisories is GA for both scopes. Enterprise deployment is GA and distributes advisories across an entire enterprise through the published REST API. Organization deployment is a private preview, remains hidden in the canvas until preview features are enabled, and normally returns `404` unless GitHub has enabled organization sync for that account.
 
+## Updating loaded advisories
+
+The sync API identifies an advisory by the OSV `id` originally supplied by the external system. Submitting that same ID to the same owner updates the existing advisory; submitting a different ID creates a separate advisory.
+
+GitHub's advisory listing returns the assigned `GHIS-*` identifier but not the original OSV ID. After loading an advisory, replace the GHIS value in **External advisory ID** with the exact ID used for the original sync before updating or withdrawing it. If that ID was not retained in the source system, the canvas cannot safely infer it from the GitHub listing.
+
 ## Authentication
 
 Loading uses the current authenticated `gh` CLI user and the GraphQL feature header `GraphQL-Features: innersource_alerting`. The user token needs `read:org` for organization sources and `read:enterprise` (or `admin:enterprise`) for enterprise sources. If an environment `GH_TOKEN` lacks the required scope, the extension retries with the credential stored by `gh auth login`.

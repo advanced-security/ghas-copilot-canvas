@@ -637,6 +637,13 @@ function populateForm(osv, item = null) {
   state.selectedSourceScope = item?.sourceScope
     ? { type: item.sourceScope.type, slug: item.sourceScope.slug }
     : null;
+  $("#externalIdNotice").classList.toggle("hidden", !item);
+  $("#externalIdNoticeText").textContent = item
+    ? `GitHub lists this advisory as ${item.ghsaId} but does not return the OSV ID originally used to sync it. Enter that exact ID above to update or withdraw it. A different ID creates a separate advisory.`
+    : "";
+  $("#advisoryIdHelp").textContent = item
+    ? "Replace the GitHub ID with the exact OSV ID originally used to sync this advisory."
+    : "Stable OSV identifier used to create, update, or withdraw this advisory.";
   state.jsonDirty = false;
   $("#jsonPreview").value = JSON.stringify(advisory, null, 2);
   $("#advisoryLink").classList.toggle("hidden", !state.selectedPermalink);
@@ -787,7 +794,11 @@ async function validateAdvisory() {
   const advisory = buildOsv();
   const local = validateOsv(advisory);
   if (state.selectedGhsaId && advisory.id.toLowerCase() === state.selectedGhsaId.toLowerCase()) {
-    local.errors.push("Replace the GitHub-assigned GHIS ID with a stable external-system ID before syncing this advisory.");
+    local.errors.push(
+      `GitHub's listing API does not expose the original OSV ID for ${state.selectedGhsaId}. `
+      + "Enter the exact ID used when this advisory was first synced to update it. "
+      + "Using a different ID creates a separate advisory.",
+    );
     local.valid = false;
   }
   if (!local.valid) {

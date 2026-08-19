@@ -556,6 +556,17 @@ input:disabled { opacity: 0.55; }
 .form-grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .form-grid .span-two { grid-column: span 2; }
 
+.external-id-notice {
+  margin: 12px 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--orange) 50%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--orange) 10%, transparent);
+  font-size: 12px;
+}
+.external-id-notice strong, .external-id-notice span { display: block; }
+.external-id-notice span { margin-top: 3px; color: var(--muted); }
+
 .compound-field {
   display: flex;
   align-items: center;
