@@ -709,16 +709,19 @@ function renderAdvisoryList() {
     const packages = [...new Set(item.sourceRanges.map((range) => range.package))].slice(0, 2);
     const date = item.updatedAt ? new Date(item.updatedAt).toLocaleDateString() : "";
     return `
-      <button class="advisory-item${state.selectedGhsaId === item.ghsaId ? " active" : ""}" type="button" data-ghsa="${escapeHtml(item.ghsaId)}">
-        <span class="id">${escapeHtml(item.ghsaId)}</span>
-        <span class="summary">${escapeHtml(item.summary)}</span>
-        <span class="meta">
-          <span class="package-tags">${packages.map((name) => `<span class="package-tag">${escapeHtml(name)}</span>`).join("")}</span>
-          <span>${escapeHtml(item.severity)}${item.withdrawn ? " - withdrawn" : ""}${date ? ` - ${escapeHtml(date)}` : ""}</span>
-        </span>
-      </button>`;
+      <div class="advisory-item${state.selectedGhsaId === item.ghsaId ? " active" : ""}">
+        <button class="advisory-select" type="button" data-ghsa="${escapeHtml(item.ghsaId)}">
+          <span class="id">${escapeHtml(item.ghsaId)}</span>
+          <span class="summary">${escapeHtml(item.summary)}</span>
+          <span class="meta">
+            <span class="package-tags">${packages.map((name) => `<span class="package-tag">${escapeHtml(name)}</span>`).join("")}</span>
+            <span>${escapeHtml(item.severity)}${item.withdrawn ? " - withdrawn" : ""}${date ? ` - ${escapeHtml(date)}` : ""}</span>
+          </span>
+        </button>
+        ${item.permalink ? `<a class="advisory-link" href="${escapeHtml(item.permalink)}" target="_blank" rel="noreferrer" title="Open advisory on GitHub" aria-label="Open ${escapeHtml(item.ghsaId)} on GitHub">↗</a>` : ""}
+      </div>`;
   }).join("");
-  $$(".advisory-item", list).forEach((button) => button.addEventListener("click", () => {
+  $$(".advisory-select", list).forEach((button) => button.addEventListener("click", () => {
     const item = state.advisories.find((candidate) => candidate.ghsaId === button.dataset.ghsa);
     if (item) populateForm(item.osv, item);
   }));
