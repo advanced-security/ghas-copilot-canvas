@@ -152,6 +152,8 @@ The canvas lets you:
 - **Select and apply** — checkbox-select orgs, then Enable all / Disable all / Matching a filter
 - **Track progress** — live per-org job progress and outcome breakdown as bulk changes roll out
 
+<img width="902" height="895" alt="image" src="https://github.com/user-attachments/assets/ba3b43b7-d3cb-4a45-ab53-167efedb8360" />
+
 ---
 
 ## Prerequisites
