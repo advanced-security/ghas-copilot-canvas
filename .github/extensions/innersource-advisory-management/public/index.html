@@ -178,11 +178,21 @@
 
           <form id="advisoryForm" autocomplete="off">
             <section class="tab-panel active" data-panel="details">
-              <div class="form-grid two">
-                <label class="field">
-                  <span>External advisory ID <span class="required">*</span></span>
-                  <input id="advisoryId" type="text" placeholder="INTERNAL-2026-001" required />
-                  <small id="advisoryIdHelp">Stable OSV identifier used to create, update, or withdraw this advisory.</small>
+              <div class="form-grid two identity-grid" id="identityGrid">
+                <label class="field" id="createOsvIdField">
+                  <span>OSV ID <span class="required">*</span></span>
+                  <input id="createOsvId" type="text" placeholder="INTERNAL-2026-001" required />
+                  <small>Stable identifier from your source system. GitHub uses it to find this advisory on later syncs.</small>
+                </label>
+                <label class="field hidden" id="githubAdvisoryIdField">
+                  <span>GitHub advisory ID</span>
+                  <input id="githubAdvisoryId" type="text" readonly />
+                  <small>Assigned by GitHub for display and links; this is not the OSV sync key.</small>
+                </label>
+                <label class="field hidden" id="updateOsvIdField">
+                  <span>OSV ID <span class="required">*</span></span>
+                  <input id="updateOsvId" type="text" placeholder="Original OSV ID" required />
+                  <small>Must exactly match the OSV ID used when this advisory was first synced.</small>
                 </label>
                 <label class="field">
                   <span>CVE alias</span>
@@ -190,9 +200,9 @@
                   <small>Separate multiple CVEs with commas. Other alias types are ignored by GitHub.</small>
                 </label>
               </div>
-              <div class="external-id-notice hidden" id="externalIdNotice" role="note">
-                <strong>Original external ID required to update</strong>
-                <span id="externalIdNoticeText"></span>
+              <div class="osv-id-notice hidden" id="osvIdNotice" role="note">
+                <strong id="osvIdNoticeTitle"></strong>
+                <span id="osvIdNoticeText"></span>
               </div>
               <label class="field">
                 <span>Summary <span class="required">*</span></span>
@@ -202,6 +212,13 @@
               <label class="field">
                 <span>Description</span>
                 <textarea id="details" rows="12" placeholder="Describe the vulnerability, impact, workarounds, and remediation guidance. Markdown is supported by GitHub."></textarea>
+              </label>
+              <label class="metadata-option">
+                <input id="includeOsvIdMetadata" type="checkbox" checked />
+                <span>
+                  <strong>Include OSV ID metadata in the description</strong>
+                  <small>Recommended. Adds a delimited section so this canvas can recover the OSV ID on future loads. Clear to opt out.</small>
+                </span>
               </label>
               <div class="form-grid two">
                 <label class="field">

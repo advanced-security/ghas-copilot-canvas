@@ -13,6 +13,60 @@ export const ECOSYSTEMS = [
   "GitHub Actions",
 ];
 
+const OSV_ID_METADATA_START = "<!-- ghas-copilot-canvas:innersource-advisory-metadata:v1";
+const OSV_ID_METADATA_END = "<!-- /ghas-copilot-canvas:innersource-advisory-metadata -->";
+const OSV_ID_METADATA_PATTERN = /<!-- ghas-copilot-canvas:innersource-advisory-metadata:v1[\s\S]*?<!-- \/ghas-copilot-canvas:innersource-advisory-metadata -->/g;
+
+function escapeMetadataHtml(value) {
+  return String(value).replace(/[&<>]/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+  })[character]);
+}
+
+export function extractOsvIdMetadata(details) {
+  let found = false;
+  let osvId = "";
+  const withoutMetadata = String(details || "").replace(OSV_ID_METADATA_PATTERN, (block) => {
+    found = true;
+    if (!osvId) {
+      const match = block.match(/^[ \t]*osv-id:[ \t]*([^\r\n]*)/m);
+      if (match?.[1]) {
+        try {
+          osvId = decodeURIComponent(match[1].trim());
+        } catch {
+          osvId = match[1].trim();
+        }
+      }
+    }
+    return "";
+  });
+  return {
+    details: withoutMetadata.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim(),
+    found,
+    osvId,
+  };
+}
+
+export function withOsvIdMetadata(details, osvId) {
+  const cleanDetails = extractOsvIdMetadata(details).details;
+  const normalizedId = String(osvId || "").trim();
+  if (!normalizedId) return cleanDetails;
+  const metadata = [
+    OSV_ID_METADATA_START,
+    `osv-id: ${encodeURIComponent(normalizedId)}`,
+    "-->",
+    "## Innersource advisory sync metadata",
+    "",
+    `- **OSV ID:** <code>${escapeMetadataHtml(normalizedId)}</code>`,
+    "",
+    "> This OSV ID is the stable update key used by the GitHub innersource advisory sync API.",
+    OSV_ID_METADATA_END,
+  ].join("\n");
+  return [cleanDetails, metadata].filter(Boolean).join("\n\n");
+}
+
 export function createGitHubDocsSampleOsv() {
   return {
     schema_version: "1.4.0",
@@ -175,12 +229,13 @@ function advisorySeverityEntries(advisory) {
 }
 
 function buildOsv(advisory) {
+  const metadata = extractOsvIdMetadata(advisory.description);
   const osv = {
     schema_version: "1.4.0",
-    id: advisory.ghsaId,
+    id: metadata.osvId || advisory.ghsaId,
     modified: advisory.updatedAt,
     summary: advisory.summary || advisory.ghsaId,
-    details: advisory.description || advisory.summary || advisory.ghsaId,
+    details: metadata.details || advisory.summary || advisory.ghsaId,
     severity: advisorySeverityEntries(advisory),
     affected: [],
   };
@@ -198,7 +253,7 @@ function buildOsv(advisory) {
     .filter(Boolean)
     .map((url) => ({ type: "WEB", url }));
   if (references.length) osv.references = references;
-  return osv;
+  return { osv, osvIdRecovered: Boolean(metadata.osvId) };
 }
 
 export function graphqlNodesToAdvisories(nodes, scope) {
@@ -216,7 +271,7 @@ export function graphqlNodesToAdvisories(nodes, scope) {
         advisory.cvssSeverities?.cvssV3,
       ].find((cvss) => cvss?.vectorString)?.score;
       const severity = reportedSeverities[0] || severityForScore(cvssScore);
-      const osv = buildOsv(advisory);
+      const { osv, osvIdRecovered } = buildOsv(advisory);
       if (severity && !["unknown", "none"].includes(severity)) {
         osv.database_specific = { severity: titleCase(severity) };
       }
@@ -229,6 +284,7 @@ export function graphqlNodesToAdvisories(nodes, scope) {
         updatedAt: advisory.updatedAt || node.updatedAt || null,
         sourceScope: normalizeScope(scope),
         sourceRanges: [],
+        osvIdRecovered,
         osv,
       };
       grouped.set(advisory.ghsaId, item);

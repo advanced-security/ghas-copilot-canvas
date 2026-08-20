@@ -3,9 +3,11 @@ import {
   createGitHubDocsSampleOsv,
   cvssV3BaseScore,
   cvssV3Vector,
+  extractOsvIdMetadata,
   parseCvssV3Vector,
   severityForScore,
   validateOsv,
+  withOsvIdMetadata,
 } from "/advisory.js";
 
 const fragmentApiToken = new URLSearchParams(location.hash.slice(1)).get("apiToken") || "";
@@ -25,6 +27,7 @@ const state = {
   selectedGhsaId: null,
   selectedPermalink: null,
   selectedSourceScope: null,
+  recoveredOsvId: null,
   jsonDirty: false,
   deployTokenConfigured: false,
   generatedDeployToken: null,
@@ -583,12 +586,16 @@ function buildOsv({ updateModified = false } = {}) {
   const v3 = $("#cvssV3").value.trim();
   const v4 = $("#cvssV4").value.trim();
   const aliases = $("#aliases").value.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean);
+  const id = (state.selectedGhsaId ? $("#updateOsvId") : $("#createOsvId")).value.trim();
+  const details = $("#includeOsvIdMetadata").checked
+    ? withOsvIdMetadata($("#details").value, id)
+    : extractOsvIdMetadata($("#details").value).details;
   const advisory = {
     schema_version: "1.4.0",
-    id: $("#advisoryId").value.trim(),
+    id,
     modified: updateModified ? new Date().toISOString() : ($("#advisoryForm").dataset.modified || new Date().toISOString()),
     summary: $("#summary").value.trim(),
-    details: $("#details").value.trim(),
+    details,
     severity: [
       ...(v3 ? [{ type: "CVSS_V3", score: v3 }] : []),
       ...(v4 ? [{ type: "CVSS_V4", score: v4 }] : []),
@@ -614,11 +621,33 @@ function buildOsv({ updateModified = false } = {}) {
 
 function populateForm(osv, item = null) {
   const advisory = structuredClone(osv || emptyOsv());
+  const embeddedMetadata = extractOsvIdMetadata(advisory.details);
+  const isUpdate = Boolean(item);
+  const recoveredOsvId = embeddedMetadata.osvId
+    || (item?.osvIdRecovered ? advisory.id : "");
+  const updateOsvId = recoveredOsvId
+    || (isUpdate && advisory.id && advisory.id !== item.ghsaId ? advisory.id : "");
+  advisory.details = embeddedMetadata.details;
+
+  state.selectedGhsaId = item?.ghsaId || null;
+  state.selectedPermalink = item?.permalink || null;
+  state.selectedSourceScope = item?.sourceScope
+    ? { type: item.sourceScope.type, slug: item.sourceScope.slug }
+    : null;
+  state.recoveredOsvId = recoveredOsvId || null;
+
   $("#advisoryForm").dataset.modified = advisory.modified || new Date().toISOString();
-  $("#advisoryId").value = advisory.id || "";
+  $("#identityGrid").classList.toggle("update", isUpdate);
+  $("#createOsvIdField").classList.toggle("hidden", isUpdate);
+  $("#githubAdvisoryIdField").classList.toggle("hidden", !isUpdate);
+  $("#updateOsvIdField").classList.toggle("hidden", !isUpdate);
+  $("#createOsvId").value = isUpdate ? "" : (advisory.id || embeddedMetadata.osvId || "");
+  $("#githubAdvisoryId").value = item?.ghsaId || "";
+  $("#updateOsvId").value = isUpdate ? updateOsvId : "";
   $("#aliases").value = (advisory.aliases || []).join(", ");
   $("#summary").value = advisory.summary || "";
   $("#details").value = advisory.details || "";
+  $("#includeOsvIdMetadata").checked = true;
   $("#published").value = localDateTime(advisory.published);
   $("#withdrawnEnabled").checked = Boolean(advisory.withdrawn);
   $("#withdrawn").disabled = !advisory.withdrawn;
@@ -632,18 +661,17 @@ function populateForm(osv, item = null) {
   (advisory.references || []).forEach(createReferenceItem);
   refreshRepeaterCounts();
 
-  state.selectedGhsaId = item?.ghsaId || null;
-  state.selectedPermalink = item?.permalink || null;
-  state.selectedSourceScope = item?.sourceScope
-    ? { type: item.sourceScope.type, slug: item.sourceScope.slug }
-    : null;
-  $("#externalIdNotice").classList.toggle("hidden", !item);
-  $("#externalIdNoticeText").textContent = item
-    ? `GitHub lists this advisory as ${item.ghsaId} but does not return the OSV ID originally used to sync it. Enter that exact ID above to update or withdraw it. A different ID creates a separate advisory.`
+  const notice = $("#osvIdNotice");
+  notice.classList.toggle("hidden", !item);
+  notice.classList.toggle("success", Boolean(state.recoveredOsvId));
+  $("#osvIdNoticeTitle").textContent = state.recoveredOsvId
+    ? "OSV ID recovered from description"
+    : "OSV ID metadata not found";
+  $("#osvIdNoticeText").textContent = item
+    ? state.recoveredOsvId
+      ? `Recovered ${recoveredOsvId} from the advisory's synchronization metadata.`
+      : `GitHub returned ${item.ghsaId}, but its listing API does not expose the original OSV ID. Enter the exact original ID to update it; a different ID creates a separate advisory.`
     : "";
-  $("#advisoryIdHelp").textContent = item
-    ? "Replace the GitHub ID with the exact OSV ID originally used to sync this advisory."
-    : "Stable OSV identifier used to create, update, or withdraw this advisory.";
   state.jsonDirty = false;
   $("#jsonPreview").value = JSON.stringify(advisory, null, 2);
   $("#advisoryLink").classList.toggle("hidden", !state.selectedPermalink);
@@ -700,6 +728,7 @@ function advisoryMatches(item) {
   if (!query) return true;
   return [
     item.ghsaId,
+    item.osvIdRecovered ? item.osv?.id : "",
     item.summary,
     ...item.sourceRanges.flatMap((range) => [range.ecosystem, range.package, range.range]),
   ].join(" ").toLowerCase().includes(query);
@@ -793,13 +822,22 @@ function hideValidation() {
 async function validateAdvisory() {
   const advisory = buildOsv();
   const local = validateOsv(advisory);
-  if (state.selectedGhsaId && advisory.id.toLowerCase() === state.selectedGhsaId.toLowerCase()) {
+  if (state.selectedGhsaId && !advisory.id) {
+    local.errors = local.errors.filter((message) => message !== "id is required.");
+    local.errors.unshift(`OSV ID is required to update ${state.selectedGhsaId}.`);
+    local.valid = false;
+  } else if (state.selectedGhsaId && advisory.id.toLowerCase() === state.selectedGhsaId.toLowerCase()) {
     local.errors.push(
-      `GitHub's listing API does not expose the original OSV ID for ${state.selectedGhsaId}. `
-      + "Enter the exact ID used when this advisory was first synced to update it. "
-      + "Using a different ID creates a separate advisory.",
+      `${state.selectedGhsaId} is the GitHub advisory ID, not the OSV ID. `
+      + "Enter the exact OSV ID used when this advisory was first synced.",
     );
     local.valid = false;
+  }
+  if (!$("#includeOsvIdMetadata").checked) {
+    local.warnings.push("OSV ID metadata is excluded from the description, so the canvas may not be able to recover this update key later.");
+  }
+  if (state.selectedGhsaId && advisory.id && advisory.id !== state.recoveredOsvId) {
+    local.warnings.push("This OSV ID was entered manually rather than recovered from description metadata. Verify it exactly matches the original sync payload.");
   }
   if (!local.valid) {
     showValidation(local);
@@ -853,16 +891,19 @@ async function openDeployModal() {
   const crossScope = state.selectedGhsaId
     && source
     && (source.type !== target.type || source.slug.toLowerCase() !== target.slug.toLowerCase());
-  const operation = advisory.withdrawn ? "withdraw" : crossScope ? "create copy" : state.selectedGhsaId ? "create or update" : "create";
+  const operation = advisory.withdrawn ? "withdraw" : crossScope ? "create copy" : state.selectedGhsaId ? "update" : "create";
   $("#deployModalBody").innerHTML = `
     <dl class="modal-body-grid">
       <dt>Operation</dt><dd>${escapeHtml(operation)}</dd>
-      <dt>Advisory</dt><dd><code>${escapeHtml(advisory.id)}</code></dd>
+      ${state.selectedGhsaId ? `<dt>GitHub advisory ID</dt><dd><code>${escapeHtml(state.selectedGhsaId)}</code></dd>` : ""}
+      <dt>OSV ID</dt><dd><code>${escapeHtml(advisory.id)}</code></dd>
       <dt>Summary</dt><dd>${escapeHtml(advisory.summary)}</dd>
       <dt>Target</dt><dd><code>${escapeHtml(target.type)}/${escapeHtml(target.slug)}</code></dd>
       <dt>Authentication</dt><dd>${escapeHtml(authentication)}</dd>
       <dt>Affected entries</dt><dd>${advisory.affected.length}</dd>
+      <dt>Description metadata</dt><dd>${$("#includeOsvIdMetadata").checked ? "Included" : "Opted out"}</dd>
     </dl>
+    ${state.selectedGhsaId && advisory.id !== state.recoveredOsvId ? `<div class="identity-warning"><strong>Verify the OSV ID:</strong> It was not recovered from this advisory's description. GitHub creates a separate advisory if the value does not match the original sync ID.</div>` : ""}
     ${target.type === "organization" ? `<div class="preview-warning"><strong>Preview target:</strong> Organization deployment is unpublished and returns 404 unless GitHub has enabled organization sync for this account.</div>` : ""}
   `;
   $("#deployModal").classList.remove("hidden");
@@ -927,7 +968,10 @@ function loadDocsSample() {
 function applyJson() {
   try {
     const advisory = JSON.parse($("#jsonPreview").value);
-    populateForm(advisory);
+    const selected = state.selectedGhsaId
+      ? state.advisories.find((item) => item.ghsaId === state.selectedGhsaId)
+      : null;
+    populateForm(advisory, selected);
     toast("OSV JSON applied to the form.", "success");
   } catch (error) {
     toast(`Invalid JSON: ${error.message}`, "error");

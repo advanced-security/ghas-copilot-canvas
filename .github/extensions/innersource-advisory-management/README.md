@@ -7,6 +7,7 @@ A Copilot canvas for managing GitHub innersource security advisories. It provide
 - Load existing GHIS advisories from either an enterprise or organization GraphQL scope.
 - Keep the source and deployment target independent, including organization-to-enterprise and cross-organization workflows.
 - Create or edit OSV 1.4 advisory data with supported ecosystems, version ranges, references, CVE aliases, withdrawal dates, raw JSON import/export, and a one-click copy of GitHub's documented minimal OSV sample for new drafts.
+- Preserve the OSV update identity in a versioned description metadata section by default, with an explicit opt-out.
 - Calculate a CVSS 3.1 base vector, score, and qualitative severity.
 - Validate GitHub-specific OSV requirements and field limits before deployment.
 - Generate a short-lived installation token from an App ID and selected PEM private key without persisting either credential.
@@ -25,9 +26,11 @@ Loading existing advisories is GA for both scopes. Enterprise deployment is GA a
 
 ## Updating loaded advisories
 
-The sync API identifies an advisory by the OSV `id` originally supplied by the external system. Submitting that same ID to the same owner updates the existing advisory; submitting a different ID creates a separate advisory.
+The sync API identifies an advisory by the OSV `id` originally supplied by the external system. Submitting that same ID to the same owner updates the existing advisory; submitting a different ID creates a separate advisory. The create form labels this value **OSV ID**. When editing a loaded advisory, the canvas shows the GitHub-assigned `GHIS-*` value separately as **GitHub advisory ID**.
 
-GitHub's advisory listing returns the assigned `GHIS-*` identifier but not the original OSV ID. After loading an advisory, replace the GHIS value in **External advisory ID** with the exact ID used for the original sync before updating or withdrawing it. If that ID was not retained in the source system, the canvas cannot safely infer it from the GitHub listing.
+GitHub's advisory listing returns the assigned `GHIS-*` identifier but not the original OSV ID. To retain that association, the canvas appends a visible **Innersource advisory sync metadata** section with a versioned, delimited machine-readable marker to the description by default. On a later load, the canvas recovers the OSV ID from that marker and removes the metadata section from the editable description before re-adding it to the sync payload. Repeated updates replace the section rather than duplicating it.
+
+Clear **Include OSV ID metadata in the description** to opt out. Advisories created before this convention, or created with the option disabled, still require the exact original OSV ID to be supplied manually. The canvas cannot safely infer it from the GitHub listing.
 
 ## Authentication
 

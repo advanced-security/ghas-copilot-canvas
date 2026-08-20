@@ -4,11 +4,13 @@ import assert from "node:assert/strict";
 import {
   createGitHubDocsSampleOsv,
   cvssV3BaseScore,
+  extractOsvIdMetadata,
   graphqlNodesToAdvisories,
   normalizeScope,
   parseCvssV3Vector,
   validateOsv,
   vulnerableRangeToAffected,
+  withOsvIdMetadata,
 } from "./advisory.mjs";
 
 const minimalAdvisory = {
@@ -85,6 +87,24 @@ test("provides the exact GitHub Docs OSV sample", () => {
   assert.equal(validateOsv(sample).valid, true);
 });
 
+test("adds, recovers, and replaces OSV ID description metadata", () => {
+  const first = withOsvIdMetadata("Impact and remediation.", "TEAM/2026 <001>");
+  assert.match(first, /## Innersource advisory sync metadata/);
+  assert.match(first, /osv-id: TEAM%2F2026%20%3C001%3E/);
+  assert.match(first, /<code>TEAM\/2026 &lt;001&gt;<\/code>/);
+
+  const extracted = extractOsvIdMetadata(first);
+  assert.deepEqual(extracted, {
+    details: "Impact and remediation.",
+    found: true,
+    osvId: "TEAM/2026 <001>",
+  });
+
+  const replaced = withOsvIdMetadata(first, "TEAM-2026-002");
+  assert.equal((replaced.match(/innersource-advisory-metadata:v1/g) || []).length, 1);
+  assert.equal(extractOsvIdMetadata(replaced).osvId, "TEAM-2026-002");
+});
+
 test("rejects unsupported Git ranges and missing CVSS", () => {
   const advisory = structuredClone(minimalAdvisory);
   advisory.severity = [];
@@ -150,6 +170,38 @@ test("groups GraphQL vulnerability ranges into one advisory", () => {
   const result = graphqlNodesToAdvisories(nodes, { type: "organization", slug: "octo-org" });
   assert.equal(result.length, 1);
   assert.equal(result[0].severity, "critical");
+  assert.equal(result[0].osv.id, "GHIS-abcd-efgh-ijkl");
+  assert.equal(result[0].osvIdRecovered, false);
   assert.equal(result[0].osv.affected.length, 2);
   assert.equal(validateOsv(result[0].osv).valid, true);
+});
+
+test("recovers the OSV ID from loaded advisory description metadata", () => {
+  const advisory = {
+    ghsaId: "GHIS-abcd-efgh-ijkl",
+    summary: "Example vulnerability",
+    description: withOsvIdMetadata("Example details", "INTERNAL-2026-001"),
+    severity: "HIGH",
+    publishedAt: "2026-08-01T00:00:00Z",
+    updatedAt: "2026-08-12T00:00:00Z",
+    withdrawnAt: null,
+    permalink: "https://github.com/advisories/GHIS-abcd-efgh-ijkl",
+    identifiers: [],
+    references: [],
+    cvssSeverities: {
+      cvssV3: { vectorString: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", score: 9.8 },
+      cvssV4: { vectorString: null, score: null },
+    },
+  };
+  const result = graphqlNodesToAdvisories([{
+    advisory,
+    severity: "HIGH",
+    package: { ecosystem: "NPM", name: "example-package" },
+    vulnerableVersionRange: "< 1.2.3",
+    firstPatchedVersion: { identifier: "1.2.3" },
+  }], { type: "organization", slug: "octo-org" });
+
+  assert.equal(result[0].osv.id, "INTERNAL-2026-001");
+  assert.equal(result[0].osv.details, "Example details");
+  assert.equal(result[0].osvIdRecovered, true);
 });
