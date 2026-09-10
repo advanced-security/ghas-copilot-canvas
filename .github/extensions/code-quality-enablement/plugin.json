@@ -1,0 +1,17 @@
+{
+  "name": "code-quality-enablement",
+  "description": "Bulk manage GitHub Code Quality and AI findings across organizations in an enterprise.",
+  "version": "0.1.0",
+  "author": {
+    "name": "GitHub Advanced Security"
+  },
+  "repository": "https://github.com/advanced-security/ghas-copilot-canvas",
+  "license": "MIT",
+  "keywords": [
+    "code-quality",
+    "codeql",
+    "security",
+    "canvas"
+  ],
+  "extensions": "."
+}

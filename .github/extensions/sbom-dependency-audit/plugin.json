@@ -1,0 +1,17 @@
+{
+  "name": "sbom-dependency-audit",
+  "description": "Scan a GitHub organization for exact SBOM package matches and inspect dependency paths.",
+  "version": "0.1.0",
+  "author": {
+    "name": "GitHub Advanced Security"
+  },
+  "repository": "https://github.com/advanced-security/ghas-copilot-canvas",
+  "license": "MIT",
+  "keywords": [
+    "sbom",
+    "dependencies",
+    "security",
+    "canvas"
+  ],
+  "extensions": "."
+}

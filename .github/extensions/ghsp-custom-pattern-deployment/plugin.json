@@ -1,0 +1,17 @@
+{
+  "name": "ghsp-custom-pattern-deployment",
+  "description": "Load patterns.yml configs and deploy secret scanning custom patterns at enterprise, organization, or repository scope.",
+  "version": "0.1.0",
+  "author": {
+    "name": "GitHub Advanced Security"
+  },
+  "repository": "https://github.com/advanced-security/ghas-copilot-canvas",
+  "license": "MIT",
+  "keywords": [
+    "secret-scanning",
+    "custom-patterns",
+    "security",
+    "canvas"
+  ],
+  "extensions": "."
+}
