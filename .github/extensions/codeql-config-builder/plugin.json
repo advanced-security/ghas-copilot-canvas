@@ -1,0 +1,17 @@
+{
+  "name": "codeql-config-builder",
+  "description": "Build, preview, download, and commit CodeQL configuration YAML through an interactive canvas.",
+  "version": "0.1.0",
+  "author": {
+    "name": "GitHub Advanced Security"
+  },
+  "repository": "https://github.com/advanced-security/ghas-copilot-canvas",
+  "license": "MIT",
+  "keywords": [
+    "codeql",
+    "configuration",
+    "security",
+    "canvas"
+  ],
+  "extensions": "."
+}

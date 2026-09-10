@@ -1,0 +1,42 @@
+{
+  "name": "ghas-copilot-canvas",
+  "owner": {
+    "name": "GitHub Advanced Security"
+  },
+  "metadata": {
+    "description": "Installable GitHub Advanced Security canvas extensions for GitHub Copilot.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "codeql-config-builder",
+      "description": "Build, preview, download, and commit CodeQL configuration YAML through an interactive canvas.",
+      "version": "0.1.0",
+      "source": ".github/extensions/codeql-config-builder"
+    },
+    {
+      "name": "sbom-dependency-audit",
+      "description": "Scan a GitHub organization for exact SBOM package matches and inspect dependency paths.",
+      "version": "0.1.0",
+      "source": ".github/extensions/sbom-dependency-audit"
+    },
+    {
+      "name": "ghsp-custom-pattern-deployment",
+      "description": "Load patterns.yml configs and deploy secret scanning custom patterns at enterprise, organization, or repository scope.",
+      "version": "0.1.0",
+      "source": ".github/extensions/ghsp-custom-pattern-deployment"
+    },
+    {
+      "name": "code-quality-enablement",
+      "description": "Bulk manage GitHub Code Quality and AI findings across organizations in an enterprise.",
+      "version": "0.1.0",
+      "source": ".github/extensions/code-quality-enablement"
+    },
+    {
+      "name": "innersource-advisory-management",
+      "description": "Create, copy, validate, and deploy GitHub innersource advisories through an OSV editor canvas.",
+      "version": "0.1.0",
+      "source": ".github/extensions/innersource-advisory-management"
+    }
+  ]
+}

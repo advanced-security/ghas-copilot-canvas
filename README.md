@@ -152,6 +152,8 @@ The canvas lets you:
 - **Select and apply** — checkbox-select orgs, then Enable all / Disable all / Matching a filter
 - **Track progress** — live per-org job progress and outcome breakdown as bulk changes roll out
 
+<img width="902" height="895" alt="image" src="https://github.com/user-attachments/assets/ba3b43b7-d3cb-4a45-ab53-167efedb8360" />
+
 ---
 
 ### 5. 🛡️ Innersource Advisory Management
@@ -188,6 +190,35 @@ No `npm install` is needed — the `@github/copilot-sdk` import is resolved auto
 
 ## Installation
 
+### Install from the marketplace
+
+Register this repository as a Copilot plugin marketplace:
+
+```bash
+copilot plugin marketplace add advanced-security/ghas-copilot-canvas
+```
+
+Install only the canvases you need:
+
+```bash
+copilot plugin install codeql-config-builder@ghas-copilot-canvas
+copilot plugin install sbom-dependency-audit@ghas-copilot-canvas
+copilot plugin install ghsp-custom-pattern-deployment@ghas-copilot-canvas
+copilot plugin install code-quality-enablement@ghas-copilot-canvas
+copilot plugin install innersource-advisory-management@ghas-copilot-canvas
+```
+
+In the GitHub Copilot app, open **Customize** → **Plugins**, add
+`advanced-security/ghas-copilot-canvas` as a custom marketplace, and install
+the canvases individually.
+
+Each extension directory is both a project-scoped canvas and an independently
+installable plugin. The marketplace manifest at
+`.github/plugin/marketplace.json` points directly to those directories, so the
+extension source is not duplicated.
+
+### Use from a repository checkout
+
 Extensions in `.github/extensions/` are **auto-discovered** when you open a session in this repository. Simply clone the repo and start a Copilot CLI session:
 
 ```bash
@@ -205,6 +236,7 @@ All five canvases will be available immediately.
 ```text
 .github/extensions/
 ├── codeql-config-builder/
+│   ├── plugin.json          # Independently installable plugin manifest
 │   ├── package.json
 │   ├── extension.mjs        # Canvas + loopback HTTP server
 │   ├── README.md
@@ -213,8 +245,10 @@ All five canvases will be available immediately.
 │       ├── app.js
 │       └── styles.css
 ├── sbom-dependency-audit/
+│   ├── plugin.json          # Independently installable plugin manifest
 │   └── extension.mjs        # Canvas + SBOM scanning logic
 ├── ghsp-custom-pattern-deployment/
+│   ├── plugin.json          # Independently installable plugin manifest
 │   ├── extension.mjs        # Canvas + loopback HTTP server / API endpoints
 │   ├── gh.mjs               # gh api wrapper (auth fallback, pagination)
 │   ├── patterns.mjs         # patterns.yml discovery + normalization
@@ -225,6 +259,7 @@ All five canvases will be available immediately.
 │   ├── js-yaml.mjs          # Vendored YAML parser
 │   └── README.md
 ├── code-quality-enablement/
+│   ├── plugin.json          # Independently installable plugin manifest
 │   ├── extension.mjs        # Canvas + loopback HTTP server / bulk job orchestration
 │   ├── diagnostics.mjs      # gh api call log tail for the diagnostics panel
 │   └── public/
@@ -232,6 +267,7 @@ All five canvases will be available immediately.
 │       ├── app.js
 │       └── styles.css
 └── innersource-advisory-management/
+    ├── plugin.json          # Independently installable plugin manifest
     ├── extension.mjs        # Canvas + loopback HTTP server / API endpoints
     ├── github.mjs           # GraphQL loading + asynchronous sync API
     ├── advisory.mjs         # OSV conversion, validation, and CVSS logic
@@ -241,6 +277,9 @@ All five canvases will be available immediately.
         ├── index.html
         ├── app.js
         └── styles.css
+
+.github/plugin/
+└── marketplace.json         # Catalog for installing each canvas separately
 ```
 
 ---
