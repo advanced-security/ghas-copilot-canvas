@@ -12,10 +12,9 @@ import {
 
 const fragmentApiToken = new URLSearchParams(location.hash.slice(1)).get("apiToken") || "";
 if (fragmentApiToken) {
-  sessionStorage.setItem("canvasApiToken", fragmentApiToken);
   history.replaceState(null, "", `${location.pathname}${location.search}`);
 }
-const API_TOKEN = fragmentApiToken || sessionStorage.getItem("canvasApiToken") || "";
+const API_TOKEN = fragmentApiToken;
 
 const state = {
   sourceType: "enterprise",

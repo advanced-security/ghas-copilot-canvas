@@ -51,7 +51,7 @@ The generation flow requires the App ID (or client ID, including `Iv1.*` values)
 
 The browser does not expose the private key's full local path. It uploads the selected PEM contents only to the canvas's loopback server for in-memory JWT signing; the key is not written to disk, returned to the browser, or logged.
 
-Every loopback API request also requires a cryptographically random, per-canvas token delivered to the UI in the URL fragment and removed from the address immediately after startup. This prevents unrelated local processes from using generated credentials held by the canvas server.
+Every loopback API request also requires a cryptographically random, per-canvas token delivered to the UI in the URL fragment, kept only in browser memory, and removed from the address immediately after startup. This prevents unrelated local processes from using generated credentials held by the canvas server.
 
 The top-right authentication summary includes an information popover showing the OAuth scopes reported for the active `gh` credentials. When the canvas holds a generated installation token, it also shows the App, installation ID, target, expiry, and granted App permissions without exposing the token.
 
