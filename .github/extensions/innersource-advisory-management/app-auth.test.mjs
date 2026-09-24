@@ -25,12 +25,12 @@ function response(value, status = 200) {
 
 test("creates a ten-minute RS256 GitHub App JWT", () => {
   const { privateKey, publicKey } = testKeyPair();
-  const jwt = createGitHubAppJwt("Iv23liExample", privateKey, Date.UTC(2026, 7, 12, 20, 0, 0));
+  const jwt = createGitHubAppJwt("Iv1.example", privateKey, Date.UTC(2026, 7, 12, 20, 0, 0));
   const [header, payload, signature] = jwt.split(".");
 
   assert.deepEqual(JSON.parse(Buffer.from(header, "base64url")), { alg: "RS256", typ: "JWT" });
   const claims = JSON.parse(Buffer.from(payload, "base64url"));
-  assert.equal(claims.iss, "Iv23liExample");
+  assert.equal(claims.iss, "Iv1.example");
   assert.equal(claims.exp - claims.iat, 600);
   assert.equal(
     verify("RSA-SHA256", Buffer.from(`${header}.${payload}`), publicKey, Buffer.from(signature, "base64url")),

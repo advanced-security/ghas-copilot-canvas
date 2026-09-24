@@ -24,7 +24,7 @@ function base64UrlJson(value) {
 
 export function createGitHubAppJwt(appIdentifier, privateKeyPem, now = Date.now()) {
   const issuer = String(appIdentifier || "").trim();
-  if (!issuer || issuer.length > 100 || !/^[A-Za-z0-9_-]+$/.test(issuer)) {
+  if (!issuer || issuer.length > 100 || !/^[A-Za-z0-9_.-]+$/.test(issuer)) {
     throw httpError("Enter a valid GitHub App ID or client ID.", 422);
   }
 

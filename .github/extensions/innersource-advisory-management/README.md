@@ -47,7 +47,7 @@ Provide the token in any of these ways:
 2. Paste it into the canvas password field for the current deployment request. The canvas does not persist or log the value.
 3. Expand **Generate an installation token**, enter the App ID or client ID, and select the App's PEM private key. The canvas creates a JWT, discovers the installation for the selected target, verifies write permission, and generates an installation token that remains only in server memory until it expires or is cleared.
 
-The generation flow requires the App ID (or client ID) and private key. It does **not** use the client secret. The App must already be installed on the selected target. Installation IDs are discovered automatically through `GET /app/installations`; an explicit installation ID can be supplied when needed. Generated installation tokens expire after one hour.
+The generation flow requires the App ID (or client ID, including `Iv1.*` values) and private key. It does **not** use the client secret. The App must already be installed on the selected target. Installation IDs are discovered automatically through `GET /app/installations`; an explicit installation ID can be supplied when needed. Generated installation tokens expire after one hour.
 
 The browser does not expose the private key's full local path. It uploads the selected PEM contents only to the canvas's loopback server for in-memory JWT signing; the key is not written to disk, returned to the browser, or logged.
 
