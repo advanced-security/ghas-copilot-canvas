@@ -1,0 +1,11 @@
+{
+  "name": "innersource-advisory-management",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Copilot canvas for loading, editing, validating, and deploying GitHub innersource advisories.",
+  "main": "extension.mjs",
+  "scripts": {
+    "test": "node --test"
+  }
+}

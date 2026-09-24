@@ -31,6 +31,12 @@
       "description": "Bulk manage GitHub Code Quality and AI findings across organizations in an enterprise.",
       "version": "0.1.0",
       "source": ".github/extensions/code-quality-enablement"
+    },
+    {
+      "name": "innersource-advisory-management",
+      "description": "Create, copy, validate, and deploy GitHub innersource advisories through an OSV editor canvas.",
+      "version": "0.1.0",
+      "source": ".github/extensions/innersource-advisory-management"
     }
   ]
 }
