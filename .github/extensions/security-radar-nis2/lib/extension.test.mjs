@@ -21,6 +21,12 @@ async function withExtension({ gh, seed, onImportError }, body) {
 	const handlers = new Map();
 	const sent = [];
 	const previousSetInterval = globalThis.setInterval;
+	const previousSetTimeout = globalThis.setTimeout;
+	const queueTimeouts = [];
+	globalThis.setTimeout = (callback, delay, ...args) => {
+		if (delay === 45000) queueTimeouts.push(callback);
+		return previousSetTimeout(callback, delay, ...args);
+	};
 	const progressTicks = [];
 	globalThis.setInterval = (callback, delay, ...args) => {
 		if (delay === 300000) progressTicks.push(callback);
@@ -74,7 +80,7 @@ async function withExtension({ gh, seed, onImportError }, body) {
 			return next(url, context);
 		},
 	});
-	const ctx = { gh, home, sent, handlers, opens: [], progressTicks, layoutCalls: 0 };
+	const ctx = { gh, home, sent, handlers, opens: [], progressTicks, queueTimeouts, layoutCalls: 0 };
 	globalThis.canvasTestLayout = () => { ctx.layoutCalls++; };
 	globalThis.canvasTestBeforeRename = (...args) => ctx.beforeRename?.(...args);
 	globalThis.canvasTestExecFile = (...args) => ctx.gh(...args);
@@ -136,6 +142,7 @@ async function withExtension({ gh, seed, onImportError }, body) {
 		delete globalThis.canvasTestLayout;
 		delete globalThis.canvasTestBeforeRename;
 		globalThis.setInterval = previousSetInterval;
+		globalThis.setTimeout = previousSetTimeout;
 		if (previousHome === undefined) delete process.env.COPILOT_HOME;
 		else process.env.COPILOT_HOME = previousHome;
 		await rm(home, { recursive: true });
@@ -179,6 +186,7 @@ function githubMock({ code = [...liveCode, workflowAlert], dependabot = liveDepe
 			assert.ok(args.includes("--paginate"));
 			assert.ok(!args.includes("--slurp"));
 			assert.equal(args[args.indexOf("--jq") + 1], ALERT_PROJECTIONS[alertType]);
+			if (alertType === "secret-scanning") assert.equal(new URL(path, "https://github.com/").searchParams.get("hide_secret"), "true");
 		}
 		const custom = await handlers?.(args);
 		if (custom) return custom;
@@ -616,6 +624,35 @@ test("events in the same batch cannot overwrite a completed panel answer", { ski
 	}
 });
 
+test("retry display labels reject expired prompt and label-only events after queue timeout", { skip }, async () => {
+	for (const transformed of [false, true]) {
+		await withExtension({ gh: githubMock() }, async (h) => {
+			await synced(h);
+			const sent = [];
+			h.session.send = async (message) => { sent.push(message); };
+			const emit = (type, data) => {
+				for (const handler of h.handlers.get(type) ?? []) handler({ data });
+			};
+			const ask = () => h.invoke("attack-surface-radar", "explain_finding", { id: campaignId(0) });
+			await ask();
+			h.queueTimeouts.at(-1)();
+			await settled(h, (state) => !state.pending);
+			await ask();
+			assert.notEqual(sent[0].displayPrompt, sent[1].displayPrompt);
+			emit("user.message", { content: sent[0].displayPrompt, ...(transformed ? { transformedContent: sent[0].prompt } : {}) });
+			emit("assistant.message", { content: "Expired request's answer." });
+			const pending = await h.invoke("attack-surface-radar", "get_state", {});
+			assert.ok(pending.pending);
+			assert.equal(pending.threads[campaignId(0)].at(-1).answer, null);
+			emit("user.message", { content: sent[1].displayPrompt });
+			emit("assistant.message", { content: "The actual retry answer." });
+			const done = await settled(h, (state) => !state.pending);
+			assert.equal(done.threads[campaignId(0)].at(-1).answer, "The actual retry answer.");
+			assert.equal(done.threads[campaignId(0)].at(-1).offline, false);
+		});
+	}
+});
+
 test("mixed-case restored repositories preserve offline cache, draft visibility and fix-session deduplication", { skip }, async () => {
 	const id = campaignId(0);
 	let online = true;
@@ -953,6 +990,8 @@ test("secret sync and campaign preparation parse only projected metadata over mu
 		assert.ok(args.includes("--paginate"));
 		assert.ok(!args.includes("--slurp"));
 		assert.equal(args[args.indexOf("--jq") + 1], ".[] | {number, state, secret_type, secret_type_display_name, html_url}");
+		const path = args.find((arg) => arg.includes("/secret-scanning/alerts"));
+		assert.equal(new URL(path, "https://github.com/").searchParams.get("hide_secret"), "true");
 		projectedCalls++;
 		return { stdout: secrets.map((alert) => JSON.stringify(alert)).join("\n") + "\n" };
 	} });
@@ -1240,7 +1279,7 @@ test("canvas HTTP actions share isolated launches, assignments and reviewed camp
 		const assessmentFinding = radar.findings.find((f) => f.id === campaignId(3));
 		const assessmentBefore = { findings: radar.findings, totals: radar.totals, assigned: radar.assigned };
 		await invoke("attack-surface-radar", "assess_priority", { id: assessmentFinding.id });
-		assert.equal(sent.at(-1).displayPrompt, `Radar · Assess priority: ${assessmentFinding.title}`);
+		assert.ok(sent.at(-1).displayPrompt.startsWith(`Radar · Assess priority: ${assessmentFinding.title} [cv-`));
 		assert.match(sent.at(-1).prompt, /bounded inspection/);
 		assert.match(sent.at(-1).prompt, /read-only inspection/);
 		await setImmediate();

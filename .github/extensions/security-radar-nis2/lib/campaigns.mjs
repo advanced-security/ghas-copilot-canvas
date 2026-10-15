@@ -101,7 +101,7 @@ export function createCampaignService({ data, context, api, list, persist, broad
 			throw new Error("Repository or default branch changed. Prepare and review the campaign again.");
 		}
 		const path = draft.kind === "code" ? "code-scanning" : "secret-scanning";
-		const ref = draft.kind === "code" ? `&ref=${encodeURIComponent(`refs/heads/${ctx.branch}`)}` : "";
+		const ref = draft.kind === "code" ? `&ref=${encodeURIComponent(`refs/heads/${ctx.branch}`)}` : "&hide_secret=true";
 		const alerts = await list(`repos/${ctx.repo}/${path}/alerts?state=open&per_page=100${ref}`);
 		return campaignScope(draft.groups, draft.kind, alerts, ctx.branch);
 	}

@@ -700,7 +700,8 @@ function askInPanel(job) {
 		context: job.attachment ? `Attached: ${job.attachment.displayName} (lines ${job.attachment.lineRange.start}–${job.attachment.lineRange.end})` : null,
 	};
 	// A per-ask nonce ties the shared chat turn back to this panel.
-	job.nonce = `cv-${randomUUID().slice(0, 8)}`;
+	job.nonce = `cv-${randomUUID()}`;
+	job.label = `${job.label} [${job.nonce}]`;
 	job.prompt = `${job.prompt}\n\n(Canvas request ${job.nonce}. Internal reference, do not repeat it.)`;
 	thread.push(entry);
 	if (thread.length > 12) thread.splice(0, thread.length - 12);
@@ -958,7 +959,7 @@ async function refreshFromGitHub() {
 		const [code, dependabot, secrets, settings] = await Promise.all([
 			ghPages(`repos/${repo}/code-scanning/alerts?state=open&per_page=100`).catch(featureOff),
 			ghPages(`repos/${repo}/dependabot/alerts?state=open&per_page=100`).catch(featureOff),
-			ghPages(`repos/${repo}/secret-scanning/alerts?state=open&per_page=100`).catch(featureOff),
+			ghPages(`repos/${repo}/secret-scanning/alerts?state=open&per_page=100&hide_secret=true`).catch(featureOff),
 			repoSettings(repo),
 		]);
 		// Alert types that are switched off count as empty; a repository where none is reachable is an error.
