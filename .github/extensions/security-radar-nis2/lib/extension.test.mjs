@@ -6,7 +6,7 @@ import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate, setTimeout as sleep } from "node:timers/promises";
-import { findingId } from "./logic.mjs";
+import { findingId, stripAlerts } from "./logic.mjs";
 
 const skip = typeof nodeModule.registerHooks !== "function" && "SDK mocking requires Node 22.15+";
 const ARTIFACTS = "extensions/security-radar-nis2/artifacts";
@@ -155,6 +155,13 @@ const liveDependencies = [{
 	number: 300, state: "open", dependency: { package: { name: "lodash", ecosystem: "npm" } }, security_advisory: { severity: "high" },
 }];
 
+const ALERT_PROJECTIONS = {
+	"code-scanning": ".[] | {number, state, html_url, assignees: [(.assignees // [])[] | {login}], rule: (.rule | {id, severity, security_severity_level, description}), most_recent_instance: (.most_recent_instance | {ref, location: (.location | {path, start_line})})}",
+	dependabot: ".[] | {number, state, html_url, dependency: (.dependency | {package: (.package | {ecosystem, name}), manifest_path}), security_advisory: (.security_advisory | {severity})}",
+	"secret-scanning": ".[] | {number, state, secret_type, secret_type_display_name, html_url}",
+};
+const alertLines = (alerts) => alerts.map((alert) => JSON.stringify(alert)).join("\n");
+
 // Answers the gh calls a sync makes. Extra routes can be added through the handlers argument.
 function githubMock({ code = [...liveCode, workflowAlert], dependabot = liveDependencies, secrets = liveSecrets, repo = "acme/widgets", handlers } = {}) {
 	return async (command, args, options) => {
@@ -166,11 +173,17 @@ function githubMock({ code = [...liveCode, workflowAlert], dependabot = liveDepe
 		}
 		assert.equal(args[args.indexOf("--hostname") + 1], "github.com", "all API calls must target the verified host");
 		if (args.includes("--paginate")) assert.equal(options.timeout, 120000, "timeout must cover all sequential pages");
+		const path = args.find((value) => value.startsWith("repos/") || value.startsWith("orgs/"));
+		const alertType = path?.match(/\/(code-scanning|dependabot|secret-scanning)\/alerts(?:\?|$)/)?.[1];
+		if (alertType) {
+			assert.ok(args.includes("--paginate"));
+			assert.ok(!args.includes("--slurp"));
+			assert.equal(args[args.indexOf("--jq") + 1], ALERT_PROJECTIONS[alertType]);
+		}
 		const custom = await handlers?.(args);
 		if (custom) return custom;
 		if (args.includes("user")) return { stdout: JSON.stringify({ login: "mona" }) };
-		const path = args.find((value) => value.startsWith("repos/") || value.startsWith("orgs/"));
-		if (path.includes("code-scanning/alerts")) return { stdout: JSON.stringify([code]) };
+		if (path.includes("code-scanning/alerts")) return { stdout: alertLines(code) };
 		if (path.includes("secret-scanning/alerts")) {
 			assert.ok(args.includes("--paginate"));
 			assert.ok(!args.includes("--slurp"));
@@ -178,7 +191,7 @@ function githubMock({ code = [...liveCode, workflowAlert], dependabot = liveDepe
 			return { stdout: secrets.map(({ number, state, secret_type, secret_type_display_name, html_url }) =>
 				JSON.stringify({ number, state, secret_type, secret_type_display_name, html_url })).join("\n") };
 		}
-		if (path.includes("dependabot/alerts")) return { stdout: JSON.stringify([dependabot]) };
+		if (path.includes("dependabot/alerts")) return { stdout: alertLines(dependabot) };
 		if (args.includes("--jq")) {
 			assert.match(args[args.indexOf("--jq") + 1], /default_branch/);
 			return { stdout: JSON.stringify({ default_branch: "main" }) };
@@ -326,8 +339,8 @@ test("assignments serialize both canvases and refresh from repository admission 
 						return { stdout: JSON.stringify({ assignees: [{ login: "copilot" }] }) };
 					}
 					if (assigned && args.some((arg) => arg.includes("code-scanning/alerts"))) {
-						return { stdout: JSON.stringify([liveCode.map((alert) =>
-							({ ...alert, assignees: [{ login: "copilot" }] }))]) };
+						return { stdout: alertLines(liveCode.map((alert) =>
+							({ ...alert, assignees: [{ login: "copilot" }] }))) };
 					}
 				} });
 				h.gh = async (command, args, options) => {
@@ -953,6 +966,54 @@ test("secret sync and campaign preparation parse only projected metadata over mu
 	});
 });
 
+test("large code and dependency listings project before buffering and retain campaign and assignment metadata", { skip }, async () => {
+	const description = "x".repeat(5000);
+	const code = Array.from({ length: 4000 }, (_, i) => ({
+		...codeAlert(i + 1, `js/large-${i % 4}`, "src/large.js", i + 1),
+		assignees: [{ login: i === 0 ? "copilot" : "human-owner", avatar_url: description }],
+		most_recent_instance: {
+			ref: i % 8 < 4 ? "refs/heads/main" : "refs/heads/feature",
+			location: { path: "src/large.js", start_line: i + 1, snippet: description },
+		},
+	}));
+	const dependabot = Array.from({ length: 4000 }, (_, i) => ({
+		number: i + 1, state: "open", html_url: `https://github.com/acme/widgets/security/dependabot/${i + 1}`,
+		dependency: { package: { ecosystem: "npm", name: `package-${i % 4}` }, manifest_path: "package-lock.json" },
+		security_advisory: { severity: "high", description },
+	}));
+	const limit = 16 * 1024 * 1024;
+	for (const alerts of [code, dependabot]) assert.ok(Buffer.byteLength(JSON.stringify(alerts)) > limit);
+	const stripped = stripAlerts({ code, dependabot });
+	const projected = {
+		"code-scanning": stripped.code.map((alert, i) => ({ ...alert, state: code[i].state })),
+		dependabot: stripped.dependabot.map((alert, i) => ({ ...alert, state: dependabot[i].state })),
+	};
+	let calls = 0;
+	const gh = githubMock({ handlers: async (args) => {
+		const path = args.find((arg) => arg.startsWith("repos/"));
+		const type = path?.match(/\/(code-scanning|dependabot)\/alerts\?/)?.[1];
+		if (!type) return;
+		assert.equal(args[args.indexOf("--jq") + 1], ALERT_PROJECTIONS[type]);
+		const stdout = alertLines(projected[type]) + "\n";
+		assert.ok(Buffer.byteLength(stdout) < limit);
+		assert.ok(!stdout.includes(description));
+		calls++;
+		return { stdout };
+	} });
+	await withExtension({ gh }, async (h) => {
+		const state = await synced(h);
+		assert.equal(state.totals.codeScanning, 4000);
+		assert.equal(state.totals.dependabot, 4000);
+		const finding = state.findings.find((item) => item.rule === "js/large-0");
+		assert.equal(finding.count, 1000);
+		assert.equal(finding.copilot.number, 1);
+		assert.equal(finding.path, "src/large.js");
+		const draft = await h.invoke("attack-surface-radar", "prepare_campaign", { ids: [finding.id], kind: "code" });
+		assert.equal(draft.numbers.length, 500, "off-default-branch alerts stay excluded after boundary projection");
+		assert.equal(calls, 3, "sync and campaign scoping share projected NDJSON parsing");
+	});
+});
+
 test("alert types that are switched off count as empty, but an all-disabled repository is an error", { skip }, async () => {
 	const disabled = () => {
 		const error = new Error("HTTP 404: Code scanning is not enabled for this repository");
@@ -1266,9 +1327,10 @@ test("canvas HTTP actions share isolated launches, assignments and reviewed camp
 				alert.assignees.push({ login: "github-agentic-autofix[bot]" });
 				return { stdout: JSON.stringify(alert) };
 			}
-			assert.ok(args.includes("--slurp"));
+			assert.ok(!args.includes("--slurp"));
+			assert.equal(args[args.indexOf("--jq") + 1], ALERT_PROJECTIONS["code-scanning"]);
 			assert.ok(args.includes("repos/acme/widgets/code-scanning/alerts?state=open&per_page=100"));
-			return { stdout: JSON.stringify([[alert]]) };
+			return { stdout: alertLines([alert]) };
 		};
 		const assigning = invoke("compliance-scoreboard", "assign_copilot", { id: round.id, controlId: theme.id });
 		const pending = await h.waitFor(async () => {

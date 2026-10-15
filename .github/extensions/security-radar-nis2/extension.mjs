@@ -1094,17 +1094,21 @@ async function repoSettings(repo) {
 	}
 }
 
-// gh cannot combine --slurp and --jq: projected secret metadata uses one JSON object per line.
+// Project alert metadata before buffering stdout; other listings retain their full paginated payload.
 function ghPages(path, headers = []) {
-	const secrets = /\/secret-scanning\/alerts(?:\?|\/|$)/.test(path);
-	const output = secrets
-		? ["--jq", ".[] | {number, state, secret_type, secret_type_display_name, html_url}"] : ["--slurp"];
+	const alertType = path.match(/\/(code-scanning|dependabot|secret-scanning)\/alerts(?:\?|$)/)?.[1];
+	const projections = {
+		"code-scanning": ".[] | {number, state, html_url, assignees: [(.assignees // [])[] | {login}], rule: (.rule | {id, severity, security_severity_level, description}), most_recent_instance: (.most_recent_instance | {ref, location: (.location | {path, start_line})})}",
+		dependabot: ".[] | {number, state, html_url, dependency: (.dependency | {package: (.package | {ecosystem, name}), manifest_path}), security_advisory: (.security_advisory | {severity})}",
+		"secret-scanning": ".[] | {number, state, secret_type, secret_type_display_name, html_url}",
+	};
+	const output = alertType ? ["--jq", projections[alertType]] : ["--slurp"];
 	return execFileAsync("gh", ["api", "--hostname", "github.com", "--paginate", ...output, path, ...headers], {
 		cwd: session.workspacePath,
 		timeout: 120000,
 		maxBuffer: 16 * 1024 * 1024,
 	}).then(({ stdout }) => {
-		if (secrets) return stdout.trim() ? stdout.trim().split("\n").map((line) => JSON.parse(line)) : [];
+		if (alertType) return stdout.trim() ? stdout.trim().split("\n").map((line) => JSON.parse(line)) : [];
 		const pages = JSON.parse(stdout || "[]");
 		if (!Array.isArray(pages)) throw new Error(`unexpected response for ${path}`);
 		return pages.flat();
