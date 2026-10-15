@@ -342,6 +342,39 @@ test("dependency-plan projections resolve only selected dependency groups and pr
 	assert.equal(model.score, complianceModel([], list).score);
 });
 
+test("dependency rollups preserve per-package penalties across the top-14 display boundary", () => {
+	for (const [count, penalty] of [[1, 1], [8, 2], [20, 3]]) {
+		const critical = Array.from({ length: 14 }, (_, i) => dep(i + 1, `critical-${i}`, "critical"));
+		const high = Array.from({ length: count }, (_, i) => dep(i + 15, "high-package", "high"));
+		const low = dep(count + 15, "low-package", "low");
+		const list = buildLiveFindings({ dependabot: [...critical, ...high, low] });
+		const rest = byId(list, "dep-rest");
+		assert.equal(rest.packages, 2);
+		assert.equal(rest.postureDeduction, penalty + 1);
+		const model = complianceModel([], list);
+		const supply = model.controls.find((c) => c.id === "supply");
+		assert.equal(supply.scoreDetails.alertPenalty, 14 + penalty + 1);
+		assert.equal(supply.score, 20 - 14 - penalty - 1);
+		assert.equal(supply.campaignFindings.find((f) => f.id === "dep-rest").deduction, penalty + 1);
+
+		const selected = findingId("dep", "npm/critical-0");
+		const projection = remediationProjection(model.controls, [selected], "dependencies");
+		const refreshed = buildLiveFindings({ dependabot: [...critical.slice(1), ...high, low] });
+		assert.equal(byId(refreshed, "dep-rest"), undefined, "both remaining packages become individual blips");
+		const resolved = complianceModel([], refreshed);
+		assert.equal(resolved.score, model.score + 1, "closing a package cannot worsen today's score");
+		assert.equal(projection.lift, 1);
+		assert.equal(projection.score, resolved.score, "preview agrees with a fresh alert sync");
+		assert.equal(complianceModel([selected], list).score, resolved.score);
+
+		const rollupProjection = remediationProjection(model.controls, ["dep-rest"], "dependencies");
+		assert.equal(rollupProjection.score, complianceModel([], buildLiveFindings({ dependabot: critical })).score);
+		assert.equal(rollupProjection.lift, penalty + 1);
+		assert.equal(rollupProjection.alerts, count + 1);
+		assert.equal(model.projected, complianceModel(criticalHighIds(list), list).score);
+	}
+});
+
 test("dependency and response-evidence advice is read-only, explicit about its scope, and does not invent fixes", () => {
 	const model = { ...complianceModel([], findings(), { evidence: { "security-md": false, runbook: false } }), source: "cache" };
 	const supply = model.controls.find((c) => c.id === "supply");
@@ -381,6 +414,33 @@ test("compliance mapping uses the corrected articles and evidence gaps", () => {
 	assert.equal(ev.runbook, false);
 	assert.equal(ev["push-protection"], true);
 	assert.equal(ev["validity-checks"], null);
+});
+
+test("unrecognized CodeQL workflow names leave evidence unknown without a false deduction", () => {
+	for (const paths of [[], [".github/workflows/custom-security.yml"], [".github/workflows/codeql.yaml"]]) {
+		const evidence = repoEvidence((path) => !path.startsWith(".github/workflows/") || paths.includes(path));
+		assert.equal(evidence.codeql, null, "default setup or a custom name cannot be disproved");
+		const model = complianceModel([], [], { evidence, evidenceSource: { codeql: "checkout" } });
+		assert.equal(model.score, 100);
+		assert.equal(model.projected, 100);
+		for (const id of ["vuln", "incident"]) {
+			const control = model.controls.find((c) => c.id === id);
+			const codeql = control.evidence.find((item) => item.id === "codeql");
+			assert.equal(codeql.status, null);
+			assert.equal(codeql.source, "unknown", "a checkout lookup is not proof of missing CodeQL");
+			assert.equal(control.scoreDetails.evidencePenalty, 0);
+		}
+		assert.doesNotMatch(auditBrief(model), /CodeQL code scanning workflow — missing|CodeQL code scanning workflow — unknown \(repo file\)/);
+	}
+	for (const path of [".github/workflows/codeql.yml", ".github/workflows/codeql-advanced.yml"]) {
+		const evidence = repoEvidence((candidate) => candidate === path);
+		assert.equal(evidence.codeql, true);
+		const control = complianceModel([], [], { evidence }).controls.find((c) => c.id === "vuln");
+		assert.deepEqual(control.evidence.find((item) => item.id === "codeql"), {
+			id: "codeql", short: "CodeQL", label: "CodeQL code scanning workflow", status: true, source: "checkout",
+		});
+		assert.equal(evidence["security-md"], false, "other missing repository files remain gaps");
+	}
 });
 
 test("alert links and briefs use the resolved repository and live totals", () => {

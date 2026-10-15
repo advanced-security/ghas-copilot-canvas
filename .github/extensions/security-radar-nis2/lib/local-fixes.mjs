@@ -35,7 +35,9 @@ export function createLocalFixLauncher({ records, parentSessionId, send, persist
 				throw new Error("Wait for the dedicated session launch to finish before resetting.");
 			}
 			const previous = { ...records };
-			for (const id of Object.keys(records)) delete records[id];
+			for (const id of Object.keys(records)) {
+				if (records[id].status !== "unknown") delete records[id];
+			}
 			try {
 				await changed();
 			} catch (error) {
@@ -48,20 +50,20 @@ export function createLocalFixLauncher({ records, parentSessionId, send, persist
 		},
 		async launch(job) {
 			const previous = records[job.id];
-			if (previous && previous.repo !== job.repo) throw new Error("A fix request for this finding belongs to another repository. Preserve its receipt and review the existing session before launching another fix.");
+			if (previous && previous.repo?.toLowerCase() !== job.repo?.toLowerCase()) throw new Error("A fix request for this finding belongs to another repository. Preserve its receipt and review the existing session before launching another fix.");
 			if (previous && previous.status !== "failed") return previous;
 			const record = {
 				id: job.id, canvasId: job.canvasId, requestId: job.requestId,
-				title: job.title, status: "launching", at: Date.now(), ...(job.repo ? { repo: job.repo } : {}),
+				title: job.title, status: "launching", at: Date.now(), ...(job.repo ? { repo: job.repo.toLowerCase() } : {}),
 			};
 			records[job.id] = record;
 			try {
 				await changed();
 			} catch (error) {
-				record.status = "unknown";
-				record.error = `Could not save the launch request: ${error.message}. No request was sent.`;
+				if (previous) records[job.id] = previous;
+				else delete records[job.id];
 				broadcast();
-				throw error;
+				throw new Error(`Could not save the launch request: ${error.message}. No request was sent; retry after restoring storage.`);
 			}
 			const timer = schedule(() => {
 				timers.delete(job.id);

@@ -13,7 +13,7 @@ const ARTIFACTS = "extensions/security-radar-nis2/artifacts";
 let importSeq = 0;
 
 // Loads extension.mjs against a mocked SDK and a mocked child_process, then hands the helpers to the test body.
-async function withExtension({ gh, seed }, body) {
+async function withExtension({ gh, seed, onImportError }, body) {
 	const home = await mkdtemp(join(tmpdir(), "security-radar-test-"));
 	const previousHome = process.env.COPILOT_HOME;
 	process.env.COPILOT_HOME = home;
@@ -28,12 +28,21 @@ async function withExtension({ gh, seed }, body) {
 	};
 	const hooks = nodeModule.registerHooks({
 		resolve(specifier, context, next) {
+			if (specifier === "./lib/logic.mjs" && context.parentURL?.includes("/extension.mjs")) {
+				return { url: "test:logic", shortCircuit: true };
+			}
 			if (specifier === "@github/copilot-sdk/extension" || specifier === "node:child_process") {
 				return { url: `test:${specifier}`, shortCircuit: true };
 			}
 			return next(specifier, context);
 		},
 		load(url, context, next) {
+			if (url === "test:logic") return {
+				format: "module", shortCircuit: true,
+				source: `export * from ${JSON.stringify(new URL("./logic.mjs", import.meta.url).href)};
+					import { layoutFindings as original } from ${JSON.stringify(new URL("./logic.mjs", import.meta.url).href)};
+					export function layoutFindings(...args) { globalThis.canvasTestLayout(); return original(...args); }`,
+			};
 			if (url === "test:node:child_process") return {
 				format: "module", shortCircuit: true,
 				source: `import { promisify } from "node:util";
@@ -56,7 +65,8 @@ async function withExtension({ gh, seed }, body) {
 			return next(url, context);
 		},
 	});
-	const ctx = { gh, home, sent, handlers, opens: [], progressTicks };
+	const ctx = { gh, home, sent, handlers, opens: [], progressTicks, layoutCalls: 0 };
+	globalThis.canvasTestLayout = () => { ctx.layoutCalls++; };
 	globalThis.canvasTestExecFile = (...args) => ctx.gh(...args);
 	globalThis.canvasTestSession = {
 		sessionId: "test-parent",
@@ -87,7 +97,12 @@ async function withExtension({ gh, seed }, body) {
 		assert.equal(progressTicks.length, previousTicks, "rehydration must not start polling before campaign service initialization");
 	};
 	try {
-		await import(`../extension.mjs?run-${++importSeq}`);
+		try {
+			await import(`../extension.mjs?run-${++importSeq}`);
+		} catch (error) {
+			await onImportError?.(ctx, error);
+			throw error;
+		}
 		ctx.session = globalThis.canvasTestSession;
 		ctx.canvases = globalThis.canvasTestConfig.canvases;
 		ctx.invoke = (canvasId, name, input) => ctx.canvases.find((c) => c.id === canvasId).actions.find((a) => a.name === name)
@@ -108,6 +123,7 @@ async function withExtension({ gh, seed }, body) {
 		delete globalThis.canvasTestConfig;
 		delete globalThis.canvasTestExecFile;
 		delete globalThis.canvasTestRehydrate;
+		delete globalThis.canvasTestLayout;
 		globalThis.setInterval = previousSetInterval;
 		if (previousHome === undefined) delete process.env.COPILOT_HOME;
 		else process.env.COPILOT_HOME = previousHome;
@@ -134,9 +150,11 @@ function githubMock({ code = [...liveCode, workflowAlert], dependabot = liveDepe
 		assert.equal(command, "gh");
 		if (args[0] === "repo") {
 			assert.equal(options.cwd, process.cwd(), "repository resolution must use the checkout, not the session artifact directory");
+			assert.equal(Object.hasOwn(options.env, "GH_REPO"), false, "checkout discovery must ignore GH_REPO");
 			return { stdout: JSON.stringify({ nameWithOwner: repo, url: `https://github.com/${repo}` }) };
 		}
 		assert.equal(args[args.indexOf("--hostname") + 1], "github.com", "all API calls must target the verified host");
+		if (args.includes("--paginate")) assert.equal(options.timeout, 120000, "timeout must cover all sequential pages");
 		const custom = await handlers?.(args);
 		if (custom) return custom;
 		if (args.includes("user")) return { stdout: JSON.stringify({ login: "mona" }) };
@@ -377,6 +395,253 @@ test("a corrupt or unreadable fix-session ledger fails initialization before any
 		}, () => assert.fail("extension must not initialize with a lost deduplication ledger")), /Cannot safely restore dedicated fix sessions/);
 		assert.equal(calls, 0);
 	}
+});
+
+test("all repository-dependent actions exclude refresh while their discovery result is pending", { skip }, async () => {
+	const actions = [
+		["attack-surface-radar", "explain_finding", { id: campaignId(0) }],
+		["attack-surface-radar", "ask_copilot", { id: campaignId(0), question: "Explain the risk" }],
+		["attack-surface-radar", "request_copilot", { id: campaignId(0) }],
+		["attack-surface-radar", "prepare_campaign", { ids: [campaignId(0)], kind: "code" }],
+		["compliance-scoreboard", "draft_dependency_plan", { controlId: "supply", ids: [findingId("dep", "npm/lodash")] }],
+		["compliance-scoreboard", "generate_brief", {}],
+	];
+	for (const [canvas, name, input] of actions) {
+		await withExtension({ gh: githubMock() }, async (h) => {
+			await synced(h);
+			const { promise, resolve } = Promise.withResolvers();
+			let entered = false;
+			let resolutions = 0;
+			const original = githubMock();
+			h.gh = async (command, args, options) => {
+				if (args[0] === "repo") { resolutions++; entered = true; await promise; }
+				return original(command, args, options);
+			};
+			const action = h.invoke(canvas, name, input);
+			try {
+				await h.waitFor(() => entered);
+				for (const target of ["attack-surface-radar", "compliance-scoreboard"]) {
+					await assert.rejects(h.invoke(target, "refresh", {}), /current GitHub operation/);
+					await assert.rejects(h.invoke(target, "ask_copilot", {
+						id: target === "attack-surface-radar" ? campaignId(0) : "vuln", question: "Explain the risk",
+					}), /current GitHub operation/);
+				}
+				assert.equal(resolutions, 1, `${name}: rejected actions must not start another discovery`);
+			} finally {
+				resolve();
+				await action;
+			}
+			h.gh = githubMock({ repo: "acme/second", code: [{
+				...codeAlert(999, "js/second", "new.js", 1), html_url: "https://github.com/acme/second/security/code-scanning/999",
+			}] });
+			await h.invoke("attack-surface-radar", "refresh", {});
+			const state = await h.invoke("attack-surface-radar", "get_state", {});
+			assert.equal(state.repo, "acme/second");
+			assert.equal(state.findings.find((finding) => finding.source === "code-scanning").rule, "js/second");
+			assert.ok(state.findings.every((finding) => finding.url.includes("/acme/second/")));
+		});
+	}
+});
+
+test("an action cannot resolve an old repository while a new repository refresh is fetching alerts", { skip }, async () => {
+	await withExtension({ gh: githubMock() }, async (h) => {
+		await synced(h);
+		const { promise, resolve } = Promise.withResolvers();
+		let entered = false;
+		let resolutions = 0;
+		const next = githubMock({ repo: "acme/second", code: [codeAlert(999, "js/second", "new.js", 1)] });
+		h.gh = async (command, args, options) => {
+			if (args[0] === "repo") resolutions++;
+			if (args.some((arg) => arg.includes("/code-scanning/alerts"))) { entered = true; await promise; }
+			return next(command, args, options);
+		};
+		const refresh = h.invoke("compliance-scoreboard", "refresh", {});
+		try {
+			await h.waitFor(() => entered);
+			await assert.rejects(h.invoke("attack-surface-radar", "ask_copilot", {
+				id: campaignId(0), question: "Explain this",
+			}), /current GitHub operation/);
+			assert.equal(resolutions, 1);
+		} finally {
+			resolve();
+			await refresh;
+		}
+		const state = await h.invoke("attack-surface-radar", "get_state", {});
+		assert.equal(state.repo, "acme/second");
+		assert.equal(state.findings.find((finding) => finding.source === "code-scanning").rule, "js/second");
+	});
+});
+
+test("GH_REPO cannot override the checkout used for repository discovery", { skip }, async () => {
+	const previous = process.env.GH_REPO;
+	process.env.GH_REPO = "someone/else";
+	try {
+		await withExtension({ gh: githubMock() }, async (h) => {
+			const radar = await synced(h);
+			assert.equal(radar.repo, "acme/widgets");
+			assert.equal(process.env.GH_REPO, "someone/else", "do not mutate the parent environment");
+			await h.invoke("attack-surface-radar", "prepare_campaign", { ids: [campaignId(0)], kind: "code" });
+			assert.equal((await h.invoke("attack-surface-radar", "get_state", {})).campaigns.draft.repo, "acme/widgets");
+		});
+	} finally {
+		if (previous === undefined) delete process.env.GH_REPO;
+		else process.env.GH_REPO = previous;
+	}
+});
+
+test("invalid campaign ledgers fail initialization without replacing receipts or querying placeholder repositories", { skip }, async () => {
+	for (const saved of ["{broken", '{"receipts":[{"id":"keep-me","repo":"invalid"}]}', '{"receipts":[],"draft":{"repo":null}}']) {
+		let calls = 0;
+		await assert.rejects(withExtension({
+			gh: async () => { calls++; throw new Error("No GitHub calls expected"); },
+			seed: async (dir) => {
+				await mkdir(dir, { recursive: true });
+				await writeFile(join(dir, "campaigns-test-parent.json"), saved);
+			},
+			onImportError: async (h) => {
+				assert.equal(await readFile(join(h.home, ARTIFACTS, "campaigns-test-parent.json"), "utf8"), saved);
+				assert.equal(h.progressTicks.length, 0);
+			},
+		}, () => assert.fail("corrupt receipts must prevent initialization")), /Cannot safely restore campaign receipts/);
+		assert.equal(calls, 0);
+	}
+});
+
+test("radar layout is cached across state reads, annotations and answer events but invalidated by fresh findings", { skip }, async () => {
+	await withExtension({ gh: githubMock() }, async (h) => {
+		const state = await synced(h);
+		const calls = h.layoutCalls;
+		for (let i = 0; i < 5; i++) await h.invoke("attack-surface-radar", "get_state", {});
+		await h.invoke("attack-surface-radar", "contain_finding", { id: campaignId(0) });
+		const annotated = await h.invoke("attack-surface-radar", "get_state", {});
+		assert.equal(annotated.findings.find((finding) => finding.id === campaignId(0)).contained, true);
+		await h.invoke("attack-surface-radar", "explain_finding", { id: campaignId(0) });
+		await settled(h, (current) => !current.pending);
+		assert.equal(h.layoutCalls, calls, "non-layout state updates must not recompute pairwise layout");
+		await h.invoke("attack-surface-radar", "refresh", {});
+		const fresh = await h.invoke("attack-surface-radar", "get_state", {});
+		assert.equal(h.layoutCalls, calls + 1);
+		assert.notEqual(fresh.layoutSeed, state.layoutSeed);
+		await h.invoke("attack-surface-radar", "get_state", {});
+		assert.equal(h.layoutCalls, calls + 1);
+	});
+});
+
+test("default local fixes skip secret groups and explicit secret selection remains rejected", { skip }, async () => {
+	await withExtension({ gh: githubMock({ code: [], secrets: liveSecrets }) }, async (h) => {
+		const state = await synced(h);
+		const secret = state.findings.find((finding) => finding.source === "secret-scanning");
+		assert.equal(state.findings[0].source, "secret-scanning");
+		const launch = await h.invoke("attack-surface-radar", "request_copilot", {});
+		assert.equal(launch.id, findingId("dep", "npm/lodash"));
+		assert.equal(h.sent.length, 1);
+		await assert.rejects(h.invoke("attack-surface-radar", "request_copilot", { id: secret.id }), /Secret rotation/);
+		assert.equal(h.sent.length, 1);
+	});
+	await withExtension({ gh: githubMock({ code: [], dependabot: [] }) }, async (h) => {
+		await synced(h);
+		await assert.rejects(h.invoke("attack-surface-radar", "request_copilot", {}), /No uncontained non-secret/);
+		assert.equal(h.sent.length, 0);
+	});
+});
+
+test("brief generations keep unique immutable paths across snapshots and repository changes", { skip }, async () => {
+	await withExtension({ gh: githubMock() }, async (h) => {
+		await synced(h);
+		const first = await h.invoke("compliance-scoreboard", "generate_brief", {});
+		const contents = await readFile(first.path, "utf8");
+		const posture = h.canvases.find((canvas) => canvas.id === "compliance-scoreboard");
+		const opened = await posture.open({ instanceId: "brief-render-check" });
+		h.opens.push({ canvas: posture, instanceId: "brief-render-check" });
+		const page = await (await fetch(opened.url)).text();
+		assert.doesNotMatch(page, /saved as audit-brief\.md/);
+		const second = await h.invoke("compliance-scoreboard", "generate_brief", {});
+		assert.notEqual(first.path, second.path);
+		assert.equal(await readFile(first.path, "utf8"), contents);
+		h.gh = githubMock({ repo: "acme/second" });
+		await h.invoke("attack-surface-radar", "refresh", {});
+		const third = await h.invoke("compliance-scoreboard", "generate_brief", {});
+		assert.notEqual(second.path, third.path);
+		assert.match(await readFile(third.path, "utf8"), /acme\/second/);
+		assert.equal(await readFile(first.path, "utf8"), contents);
+		assert.match(contents, /acme\/widgets/);
+		assert.equal((await h.invoke("compliance-scoreboard", "get_state", {})).brief.path, third.path);
+		for (const brief of [first, second, third]) assert.equal((await stat(brief.path)).mode & 0o777, 0o600);
+	});
+});
+
+test("events in the same batch cannot overwrite a completed panel answer", { skip }, async () => {
+	for (const tail of ["assistant", "user"]) {
+		await withExtension({ gh: githubMock() }, async (h) => {
+			await synced(h);
+			const emit = (type, content) => {
+				for (const handler of h.handlers.get(type) ?? []) handler({ data: { content } });
+			};
+			h.session.send = async (message) => {
+				emit("user.message", message.prompt);
+				emit("assistant.message", "The completed panel answer.");
+				if (tail === "assistant") emit("assistant.message", "Unrelated chat answer.");
+				else emit("user.message", "A different chat question.");
+			};
+			await h.invoke("attack-surface-radar", "ask_copilot", { id: campaignId(0), question: "Explain the risk" });
+			const state = await settled(h, (current) => !current.pending);
+			const entry = state.threads[campaignId(0)].at(-1);
+			assert.equal(entry.answer, "The completed panel answer.");
+			assert.equal(entry.offline, false);
+		});
+	}
+});
+
+test("mixed-case restored repositories preserve offline cache, draft visibility and fix-session deduplication", { skip }, async () => {
+	const id = campaignId(0);
+	let online = true;
+	const live = githubMock({ repo: "Acme/Widgets" });
+	await withExtension({
+		gh: (command, args, options) => {
+			if (!online) {
+				if (command === "git") return { stdout: "git@github.com:acme/widgets.git" };
+				throw new Error("Offline");
+			}
+			return live(command, args, options);
+		},
+		seed: async (dir) => {
+			await mkdir(dir, { recursive: true });
+			await writeFile(join(dir, "local-fixes-test-parent.json"), JSON.stringify({
+				[id]: { id, requestId: "saved", canvasId: "attack-surface-radar", status: "unknown", repo: "Acme/Widgets" },
+			}));
+			await writeFile(join(dir, "campaigns-test-parent.json"), JSON.stringify({
+				draft: { id: "saved-draft", repo: "ACME/WIDGETS" }, receipts: [],
+			}));
+		},
+	}, async (h) => {
+		const initial = await synced(h);
+		assert.equal(initial.repo, "acme/widgets");
+		assert.equal(initial.localFixes[id].requestId, "saved");
+		assert.equal(initial.campaigns.draft.id, "saved-draft");
+		const dir = join(h.home, ARTIFACTS);
+		const cacheFile = join(dir, "radar-cache-acme%2Fwidgets.json");
+		const cache = JSON.parse(await readFile(cacheFile, "utf8"));
+		cache.repo = "Acme/Widgets";
+		await writeFile(cacheFile, JSON.stringify(cache));
+		online = false;
+		// Reload so fallback must restore the uppercase payload rather than retain in-memory data.
+		await import(`../extension.mjs?case-reload-${++importSeq}`);
+		const canvas = globalThis.canvasTestConfig.canvases.find((item) => item.id === "attack-surface-radar");
+		const invoke = (name, input = {}) => canvas.actions.find((action) => action.name === name).handler({ canvasId: canvas.id, input });
+		await h.waitFor(async () => !(await invoke("get_state")).refreshing);
+		const restored = await invoke("get_state");
+		assert.equal(restored.repo, "acme/widgets");
+		assert.equal(restored.source, "cache");
+		assert.equal(restored.campaigns.draft.id, "saved-draft");
+		assert.equal(restored.localFixes[id].repo, "acme/widgets");
+		await invoke("request_copilot", { id });
+		assert.equal(h.sent.length, 0, "existing unknown receipt must be reused after case-only fallback");
+		await invoke("reset_demo");
+		const reset = await invoke("get_state");
+		assert.equal(reset.localFixes[id].status, "unknown");
+		await invoke("record_fix_session", { id, requestId: "saved", sessionId: "late-child", appUrl: "ghapp://sessions/late-child" });
+		assert.equal((await invoke("get_state")).localFixes[id].status, "launched");
+	});
 });
 
 test("containment annotations are repository-scoped and cannot change live posture or campaign scope", { skip }, async () => {

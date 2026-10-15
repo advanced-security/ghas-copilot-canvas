@@ -73,6 +73,11 @@ let stopCampaignProgress;
 let activeAsk = null;
 let containmentRepo = null;
 let githubOperation = null;
+let radarLayout = { findings: null, seed: null, value: [] };
+const REPOSITORY_ACTIONS = new Set([
+	"request_copilot", "fix_locally", "assign_copilot", "ask_copilot", "explain_finding", "assess_priority",
+	"suggest_fix", "prepare_campaign", "create_campaign", "publish_campaign", "draft_dependency_plan", "generate_brief",
+]);
 
 function newSeed() {
 	return 1 + Math.floor(Math.random() * 1e9);
@@ -118,7 +123,7 @@ async function loadCache(repo) {
 	try {
 		await chmod(cachePath(repo), 0o600);
 		const cache = JSON.parse(await readFile(cachePath(repo), "utf8"));
-		if (cache && cache.repo === repo && Array.isArray(cache.code) && Array.isArray(cache.dependabot) && Array.isArray(cache.secrets)) {
+		if (cache && cache.repo?.toLowerCase() === repo && Array.isArray(cache.code) && Array.isArray(cache.dependabot) && Array.isArray(cache.secrets)) {
 			world.radarFindings = buildLiveFindings(cache);
 			world.totals = radarTotals(cache, cache.syncedAt);
 			world.source = "cache";
@@ -164,7 +169,7 @@ function currentEvidence() {
 	const evidence = repoEvidence((path) => existsSync(join(root, path)), world.settings);
 	const evidenceSource = {};
 	for (const item of EVIDENCE) {
-		if (item.paths) evidenceSource[item.id] = "checkout";
+		if (item.paths) evidenceSource[item.id] = evidence[item.id] != null ? "checkout" : "unknown";
 		else evidenceSource[item.id] = evidence[item.id] != null ? world.settingsSource ?? "cached" : "unknown";
 	}
 	return { evidence, evidenceSource };
@@ -222,7 +227,13 @@ function stateFor(canvasId) {
 		repoError: world.repoError,
 	};
 	if (canvasId === "attack-surface-radar") {
-		const findings = layoutFindings(world.radarFindings, world.layoutSeed).map((finding) => ({
+		if (radarLayout.findings !== world.radarFindings || radarLayout.seed !== world.layoutSeed) {
+			radarLayout = {
+				findings: world.radarFindings, seed: world.layoutSeed,
+				value: layoutFindings(world.radarFindings, world.layoutSeed),
+			};
+		}
+		const findings = radarLayout.value.map((finding) => ({
 			...finding,
 			what: findingBrief(finding).what,
 			url: radarFindingUrl(finding, world.repo),
@@ -304,11 +315,11 @@ function readBody(req) {
 }
 
 async function handleAction(canvasId, name, input = {}) {
-	if (name !== "assign_copilot") return handleActionUnlocked(canvasId, name, input);
-	if (githubOperation || world.radar.pending || world.compliance.pending) {
-		throw new CanvasError("busy", "Wait for the current GitHub operation or previous question in either canvas.");
+	if (!REPOSITORY_ACTIONS.has(name)) return handleActionUnlocked(canvasId, name, input);
+	if (githubOperation || world.resetting || (name === "assign_copilot" && (world.radar.pending || world.compliance.pending))) {
+		throw new CanvasError("busy", "Wait for the current GitHub operation to finish or the previous question in either canvas.");
 	}
-	githubOperation = "assignment";
+	githubOperation = name;
 	try {
 		return await handleActionUnlocked(canvasId, name, input);
 	} finally {
@@ -319,8 +330,7 @@ async function handleAction(canvasId, name, input = {}) {
 
 async function handleActionUnlocked(canvasId, name, input = {}) {
 	const id = typeof input.id === "string" ? input.id : undefined;
-	if (["request_copilot", "fix_locally", "assign_copilot", "ask_copilot", "explain_finding", "assess_priority",
-		"suggest_fix", "prepare_campaign", "create_campaign", "publish_campaign", "draft_dependency_plan"].includes(name)) {
+	if (REPOSITORY_ACTIONS.has(name)) {
 		if (world.refreshing) throw new CanvasError("busy", "Wait for the GitHub refresh to finish.");
 		const previousRepo = world.repo;
 		const repo = await resolveRepo();
@@ -411,8 +421,8 @@ async function handleActionUnlocked(canvasId, name, input = {}) {
 		}
 		if (name === "request_copilot") {
 			if (input.id !== undefined && !radarFinding(id)) throw new CanvasError("unknown_finding", "That blip is no longer on the radar. Select it again.");
-			const finding = input.id === undefined ? world.radarFindings.find((item) => !world.contained.has(item.id)) : radarFinding(id);
-			if (!finding) throw new CanvasError("nothing_to_send", "Every mapped finding is already contained.");
+			const finding = input.id === undefined ? world.radarFindings.find((item) => item.source !== "secret-scanning" && !world.contained.has(item.id)) : radarFinding(id);
+			if (!finding) throw new CanvasError("nothing_to_send", "No uncontained non-secret finding is available for a local fix.");
 			if (finding.source === "secret-scanning") throw new CanvasError("not_code", "Secret rotation requires human action; no secret values are loaded.");
 			return launchLocalFix(canvasId, finding, radarPrompt("change", finding, "Apply the proposed remediation locally.", { repo: world.repo }));
 		}
@@ -455,7 +465,7 @@ async function handleActionUnlocked(canvasId, name, input = {}) {
 		if (name === "generate_brief") {
 			const dir = artifactDir();
 			await mkdir(dir, { recursive: true });
-			const path = join(dir, "audit-brief.md");
+			const path = join(dir, `audit-brief-${encodeURIComponent(world.repo ?? "unresolved")}-${randomUUID()}.md`);
 			const model = complianceNow();
 			await privateWrite(path, auditBrief(model));
 			// Freeze what the brief says, so the cards match the saved file even after a refresh.
@@ -658,7 +668,7 @@ function askCompliance(kind, control, question) {
 
 function askInPanel(job) {
 	const { canvasId, store, key } = job;
-	if (activeAsk || githubOperation === "assignment" || store.pending) throw new CanvasError("busy", "Copilot is still answering the previous question. Wait before asking in either security canvas.");
+	if (activeAsk || githubOperation === "assign_copilot" || store.pending) throw new CanvasError("busy", "Copilot is still answering the previous question. Wait before asking in either security canvas.");
 	activeAsk = job;
 	const thread = (store.threads[key] ??= []);
 	const entry = {
@@ -742,6 +752,7 @@ async function collectAnswer(job, entry, unsubscribe) {
 		};
 		unsubscribe.push(
 			session.on("user.message", (event) => {
+				if (finished) return;
 				const data = event.data ?? {};
 				const text = [data.content, data.transformedContent].filter((v) => typeof v === "string").join("\n");
 				const ours = text.includes(nonce) || data.content === label;
@@ -775,7 +786,7 @@ async function collectAnswer(job, entry, unsubscribe) {
 				}
 			}),
 			session.on("assistant.message", (event) => {
-				if (!started || event.data?.parentToolCallId) return;
+				if (!started || finished || event.data?.parentToolCallId) return;
 				const text = event.data?.content;
 				if (typeof text !== "string" || !text.trim()) return;
 				lastMessage = text.trim();
@@ -1006,9 +1017,10 @@ async function resolveRepo() {
 	const cwd = repoRoot();
 	let ghError;
 	try {
-		const { stdout } = await execFileAsync("gh", ["repo", "view", "--json", "nameWithOwner,url"], { cwd, timeout: 8000 });
+		const { GH_REPO: _override, ...env } = process.env;
+		const { stdout } = await execFileAsync("gh", ["repo", "view", "--json", "nameWithOwner,url"], { cwd, env, timeout: 8000 });
 		const { nameWithOwner: repo, url } = JSON.parse(stdout);
-		if (typeof repo === "string" && REPO_PATTERN.test(repo) && parseRemoteRepo(url) === repo) return remember(repo);
+		if (typeof repo === "string" && REPO_PATTERN.test(repo) && parseRemoteRepo(url)?.toLowerCase() === repo.toLowerCase()) return remember(repo);
 		throw new Error("Only repositories hosted on github.com are supported.");
 	} catch (error) {
 		ghError = error;
@@ -1026,6 +1038,7 @@ async function resolveRepo() {
 }
 
 async function remember(repo) {
+	repo = repo?.toLowerCase() ?? null;
 	if (world.repo?.toLowerCase() !== repo?.toLowerCase()) {
 		world.contained.clear();
 		containmentRepo = null;
@@ -1072,7 +1085,7 @@ function ghPages(path, headers = []) {
 		? ["--jq", ".[] | {number, state, secret_type, secret_type_display_name, html_url}"] : ["--slurp"];
 	return execFileAsync("gh", ["api", "--hostname", "github.com", "--paginate", ...output, path, ...headers], {
 		cwd: session.workspacePath,
-		timeout: 12000,
+		timeout: 120000,
 		maxBuffer: 16 * 1024 * 1024,
 	}).then(({ stdout }) => {
 		if (secrets) return stdout.trim() ? stdout.trim().split("\n").map((line) => JSON.parse(line)) : [];
@@ -1197,7 +1210,7 @@ function defineCanvas(id, displayName, description, actions) {
 		displayName,
 		description,
 		inputSchema,
-		actions: [...actions, ...campaignActions(id), action("reset_demo", "Reset shared answers, containment, preview, known campaign tracking and local session links across both security canvases. Existing sessions, real GitHub assignments and campaigns on GitHub are preserved."),
+		actions: [...actions, ...campaignActions(id), action("reset_demo", "Reset shared answers, containment, preview, known campaign tracking and confirmed local session links across both security canvases. Unconfirmed receipts, existing sessions, real GitHub assignments and campaigns on GitHub are preserved."),
 		action("record_fix_session", "Record the actual dedicated worktree session created for a local fix.", {
 			requestId: { type: "string", minLength: 1 },
 			sessionId: { type: "string", minLength: 1 },
@@ -1217,7 +1230,7 @@ function defineCanvas(id, displayName, description, actions) {
 			sessionReady.then(() => {
 				if (stopCampaignProgress || !servers.size) return;
 				stopCampaignProgress = scheduleCampaignProgress(campaignService, {
-					canRefresh: () => !world.refreshing && !world.resetting,
+					canRefresh: () => !githubOperation && !world.refreshing && !world.resetting,
 					onError: (error) => session.log(`Automatic campaign progress refresh failed: ${error.message}`, { level: "error" }),
 				});
 			});
@@ -1336,7 +1349,7 @@ const session = await joinSession({
 				action("toggle_preview", "Show or hide the projected score once critical and high findings are fixed."),
 				action("preview_lift", "Show the projected score once critical and high findings are fixed."),
 				action("clear_lift", "Hide the projected score."),
-				action("generate_brief", "Build the posture brief from live data and write audit-brief.md."),
+				action("generate_brief", "Build and save a uniquely named posture brief snapshot from live data."),
 				action("close_brief", "Hide the posture brief cards."),
 				action("fix_locally", "Launch a dedicated worktree session for a displayed non-secret finding (id) from a control theme (controlId). Without controlId, id is a theme and targets its first non-secret finding.", {
 					controlId: { type: "string", minLength: 1 },
@@ -1371,6 +1384,7 @@ try {
 	if (!restored || typeof restored !== "object" || Array.isArray(restored)) throw new Error("Invalid saved local fix state.");
 	for (const record of Object.values(restored)) {
 		if (!record || typeof record !== "object" || !record.requestId || !record.canvasId) throw new Error("Invalid saved local fix record.");
+		if (typeof record.repo === "string") record.repo = record.repo.toLowerCase();
 		if (record.status === "launching") {
 			record.status = "unknown";
 			record.error = "Extension reloaded before session launch was confirmed. Check the session sidebar before launching another fix.";
@@ -1404,17 +1418,20 @@ try {
 	Object.assign(campaignData, restored);
 	for (const receipt of campaignData.receipts) {
 		if (!receipt || !/^[\w.-]+\/[\w.-]+$/.test(receipt.repo) || typeof receipt.id !== "string") throw new Error("Invalid saved campaign receipt.");
+		receipt.repo = receipt.repo.toLowerCase();
 		if (receipt.status === "publishing") {
 			receipt.status = "unknown";
 			receipt.error = "Extension reloaded before publication was confirmed. Check publication; do not retry.";
 		}
 	}
+	if (campaignData.draft) {
+		if (typeof campaignData.draft.repo !== "string" || !REPO_PATTERN.test(campaignData.draft.repo)) throw new Error("Invalid saved campaign preparation.");
+		campaignData.draft.repo = campaignData.draft.repo.toLowerCase();
+	}
 } catch (error) {
 	if (error.code !== "ENOENT") {
 		session.log(`Could not restore campaign state: ${error.message}`, { level: "error" });
-		// Refuse mutations rather than discard a possibly submitted publication.
-		campaignData.receipts = [{ id: "restore-error", repo: world.repo ?? "unknown/unknown", status: "unknown", marker: "[invalid-receipt]", error: `Cannot restore campaign receipts: ${error.message}. Inspect the saved ledger before publishing.` }];
-		campaignData.draft = null;
+		throw new Error(`Cannot safely restore campaign receipts: ${error.message}. Inspect the saved ledger before reloading.`);
 	}
 }
 campaignService = createCampaignService({

@@ -129,7 +129,7 @@ test("reset persists an empty launch ledger and permits a fresh session", async 
 	assert.equal(f.records[job.id].sessionId, "child-2");
 });
 
-test("reset is blocked during launch and expired timers cannot resurrect cleared records", async () => {
+test("reset blocks active launches and retains unknown launches for deduplication and late receipts", async () => {
 	const f = fixture();
 	await f.launcher.launch(job);
 	await assert.rejects(f.launcher.reset(), /launch to finish/);
@@ -137,7 +137,51 @@ test("reset is blocked during launch and expired timers cannot resurrect cleared
 	f.timers[0]();
 	await f.launcher.reset();
 	f.timers[0]();
-	assert.deepEqual(f.records, {});
+	assert.equal(f.records[job.id].status, "unknown");
+	await f.launcher.launch({ ...job, requestId: "duplicate" });
+	assert.equal(f.messages.length, 1);
+	await f.launcher.recordSession(job.canvasId, receipt);
+	assert.equal(f.records[job.id].sessionId, receipt.sessionId);
+});
+
+test("reset retains delivery-error records without resending and still accepts their late receipt", async () => {
+	const f = fixture(async () => { throw new Error("delivery uncertain"); });
+	await assert.rejects(f.launcher.launch(job), /delivery uncertain/);
+	await f.launcher.reset();
+	assert.equal(f.records[job.id].status, "unknown");
+	await f.launcher.launch(job);
+	assert.equal(f.messages.length, 1);
+	await f.launcher.recordSession(job.canvasId, receipt);
+	assert.equal(f.records[job.id].status, "launched");
+});
+
+test("an unsent launch is removed after initial persistence failure and can be retried", async () => {
+	const records = {};
+	let fail = true;
+	let sent = 0;
+	const launcher = createLocalFixLauncher({
+		records, send: async () => { sent++; }, broadcast() {}, log() {},
+		persist: async () => { if (fail) throw new Error("disk full"); },
+	});
+	await assert.rejects(launcher.launch(job), /No request was sent; retry/);
+	assert.deepEqual(records, {});
+	assert.equal(sent, 0);
+	fail = false;
+	const retry = await launcher.launch({ ...job, requestId: "retry" });
+	assert.equal(retry.requestId, "retry");
+	assert.equal(retry.status, "launching");
+	assert.equal(sent, 1);
+	await launcher.recordSession(job.canvasId, { ...receipt, requestId: "retry" });
+});
+
+test("repository identity is case-insensitive for both restored and new launch records", async () => {
+	const f = fixture();
+	await f.launcher.launch({ ...job, repo: "Acme/Widgets" });
+	assert.equal(f.records[job.id].repo, "acme/widgets");
+	f.records[job.id].repo = "ACME/WIDGETS";
+	await f.launcher.launch({ ...job, repo: "acme/widgets", requestId: "duplicate" });
+	assert.equal(f.messages.length, 1);
+	await f.launcher.recordSession(job.canvasId, receipt);
 });
 
 test("a failed reset restores the existing session link instead of claiming success", async () => {

@@ -176,6 +176,7 @@ export function buildLiveFindings({ code = [], dependabot = [], secrets = [], de
 			count: rest.reduce((sum, pkg) => sum + pkg.count, 0),
 			packages: rest.length,
 			packageNames: rest.map((pkg) => pkg.rule.split("/").slice(1).join("/")),
+			postureDeduction: rest.reduce((sum, pkg) => sum + deduction(pkg), 0),
 			bySeverity,
 			controlIds: ["supply"],
 			remediation: remediationFor("dependabot", { rollup: true }),
@@ -307,8 +308,11 @@ export const EVIDENCE_SOURCE_LABEL = {
 export function repoEvidence(exists, settings = null) {
 	const out = {};
 	for (const item of EVIDENCE) {
-		if (item.paths) out[item.id] = item.paths.some((path) => exists(path));
-		else {
+		if (item.paths) {
+			const found = item.paths.some((path) => exists(path));
+			// Default setup and custom workflow names cannot be ruled out by this file check.
+			out[item.id] = item.id === "codeql" && !found ? null : found;
+		} else {
 			const status = settings?.[item.setting]?.status;
 			out[item.id] = status === "enabled" ? true : status === "disabled" ? false : null;
 		}
@@ -528,7 +532,7 @@ function deduction(finding) {
 		if (finding.count >= 8) return 2;
 		return 1;
 	}
-	if (finding.id === "dep-rest") return 2;
+	if (finding.id === "dep-rest") return finding.postureDeduction ?? 2;
 	const base = WEIGHT[finding.severity] ?? 1;
 	const extra = finding.count > 1 ? Math.min(4, Math.floor((finding.count - 1) / 3)) : 0;
 	return base + extra;
@@ -563,7 +567,7 @@ function evidenceFor(control, evidence, sources = {}) {
 		short: item.short,
 		label: item.label,
 		status: evidence?.[item.id] ?? null,
-		source: sources[item.id] ?? (item.paths ? "checkout" : "unknown"),
+		source: evidence?.[item.id] == null ? "unknown" : sources[item.id] ?? (item.paths ? "checkout" : "unknown"),
 	}));
 }
 

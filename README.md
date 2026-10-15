@@ -162,7 +162,7 @@ The canvas lets you:
 
 Two complementary canvases that turn the **open GHAS alerts of the current repository** (code scanning, Dependabot, secret scanning) into something you can read at a glance and act on. Alert metadata is read through `gh api`; secret values are never loaded.
 
-**TL;DR**
+#### TL;DR
 
 - **Attack surface radar** (`attack-surface-radar`) — a live radar where every blip is a group of alerts (one per code scanning rule, secret type or vulnerable package), placed on rings by severity. Pick a blip to have Copilot **explain** it, **assess its priority** (read-only, advisory), **suggest a fix** or answer a free-form question; then **fix it locally** in a dedicated Copilot App worktree session, or **assign** a code scanning alert to Copilot Autofix.
 - **NIS2 / DORA posture** (`compliance-scoreboard`) — an *illustrative* score built from the same alerts plus repository evidence (CodeQL workflow, `SECURITY.md`, Dependabot config and security updates, push protection, validity checks, `CODEOWNERS`, incident runbook). Findings are mapped to five control themes (vulnerability handling, supply chain, secrets and access, secure change control, incident-response evidence). Preview the projected score once top findings are fixed, ask Copilot for a 30-day plan, board summary or auditor evidence checklist, generate a posture brief, and create and track code scanning campaigns. For secret alerts, it only prepares the scope and links to GitHub; secret campaigns are not created or tracked. It is **not a legal assessment**.

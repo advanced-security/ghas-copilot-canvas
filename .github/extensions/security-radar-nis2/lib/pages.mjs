@@ -488,7 +488,7 @@ function localFixHtml(record) {
 }
 function resetButton(s) {
   return '<button class="ghost" data-act="reset_demo"' + (s.resetBlocked ? " disabled" : "") +
-    ' title="Reset answers, local campaign preparation, known campaign tracking and local session links across both security canvases. Existing sessions, real GitHub assignments and campaigns on GitHub are preserved.">' +
+    ' title="Reset answers, local campaign preparation, known campaign tracking and confirmed local session links across both security canvases. Unconfirmed launch receipts, existing sessions, real GitHub assignments and campaigns on GitHub are preserved.">' +
     (s.resetting ? "Resetting…" : "Reset") + "</button>";
 }
 function srcClass(s) { return s.source === "github" ? "live" : s.source === "cache" ? "cache" : "none"; }
@@ -1291,7 +1291,7 @@ function briefHtml(s) {
   missing.slice(0, 2).forEach((label) => actions.push("Add " + label));
   const t = m.totals || {};
   return '<section class="c-brief"><div class="c-brief-head"><span class="spark">✦</span><h3>Posture brief</h3><span class="note">Built ' + esc(s.brief.at || "") +
-    " from " + (m.source === "github" ? "live GitHub data" : "the last sync") + " · saved as audit-brief.md" +
+    " from " + (m.source === "github" ? "live GitHub data" : "the last sync") + " · saved as " + esc((s.brief.path || "").split("/").pop()) +
     (stale ? ' · <b class="stale">score is now ' + s.score + ", rebuild to update</b>" : "") + '</span><button class="small ghost" data-act="close_brief">Close</button></div><div class="c-cards">' +
     '<div class="c-card"><h4>Headline</h4><p class="big">' + m.score + '<span class="note">/100</span> → <span class="g">' + m.projected + '</span></p><p>Illustrative posture today, and once critical and high findings are fixed. ' +
     esc((t.codeScanning || 0) + " code, " + (t.dependabot || 0) + " dependency and " + (t.secretScanning || 0) + " secret alerts open.") + "</p></div>" +
