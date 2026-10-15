@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
@@ -70,6 +70,8 @@ const servers = new Map();
 const streams = new Map();
 let campaignService;
 let stopCampaignProgress;
+let activeAsk = null;
+let containmentRepo = null;
 
 function newSeed() {
 	return 1 + Math.floor(Math.random() * 1e9);
@@ -80,18 +82,27 @@ function artifactDir() {
 	return join(home, "extensions", "security-radar-nis2", "artifacts");
 }
 
-async function loadState() {
+function containmentPath(repo) {
+	return join(artifactDir(), `state-${encodeURIComponent(repo.toLowerCase())}.json`);
+}
+
+async function loadState(repo) {
+	if (containmentRepo === repo.toLowerCase()) return;
+	world.contained.clear();
+	containmentRepo = repo.toLowerCase();
 	try {
-		const raw = JSON.parse(await readFile(join(artifactDir(), "state.json"), "utf8"));
+		const raw = JSON.parse(await readFile(containmentPath(repo), "utf8"));
+		if (raw.repo?.toLowerCase() !== containmentRepo) throw new Error("Saved containment belongs to another repository.");
 		world.contained = new Set(Array.isArray(raw.contained) ? raw.contained : []);
-	} catch {
-		// No saved containment on the first run.
+	} catch (error) {
+		if (error.code !== "ENOENT") session.log(`Could not restore containment: ${error.message}`, { level: "error" });
 	}
 }
 
 // The cache is keyed by repository: alerts synced from another checkout must not show up here.
 async function loadCache(repo) {
 	try {
+		await chmod(join(artifactDir(), "radar-cache.json"), 0o600);
 		const cache = JSON.parse(await readFile(join(artifactDir(), "radar-cache.json"), "utf8"));
 		if (cache && cache.repo === repo && Array.isArray(cache.code) && Array.isArray(cache.dependabot) && Array.isArray(cache.secrets)) {
 			world.radarFindings = buildLiveFindings(cache);
@@ -102,19 +113,26 @@ async function loadCache(repo) {
 				world.settingsSource = "cached";
 			}
 		}
-	} catch {
-		// No earlier GitHub sync for this repository on this machine.
+	} catch (error) {
+		if (error.code !== "ENOENT") session.log(`Could not restore radar cache: ${error.message}`, { level: "warning" });
 	}
 }
 
 async function saveState(contained = containedIds()) {
+	const repo = world.repo;
+	if (!repo) {
+		if (!contained.length) return;
+		throw new CanvasError("unknown_repository", "Resolve the current repository before annotating findings.");
+	}
 	const dir = artifactDir();
 	await mkdir(dir, { recursive: true });
+	const path = containmentPath(repo);
 	await writeFile(
-		join(dir, "state.json.tmp"),
-		JSON.stringify({ contained }, null, 2),
+		`${path}.tmp`,
+		JSON.stringify({ repo, contained }, null, 2),
+		{ mode: 0o600 },
 	);
-	await rename(join(dir, "state.json.tmp"), join(dir, "state.json"));
+	await rename(`${path}.tmp`, path);
 }
 
 function containedIds() {
@@ -139,7 +157,8 @@ function currentEvidence() {
 }
 
 function complianceNow() {
-	return complianceModel(containedIds(), world.radarFindings, { totals: world.totals, repo: world.repo, ...currentEvidence() });
+	// Local annotations never close GitHub alerts or improve today's posture.
+	return complianceModel([], world.radarFindings, { totals: world.totals, repo: world.repo, ...currentEvidence() });
 }
 
 function resetBlocked() {
@@ -225,7 +244,7 @@ function stateFor(canvasId) {
 		localFixes: world.localFixes,
 		campaigns: campaignService?.state(),
 		campaignThemes: Object.fromEntries(complianceNow().controls.map((control) => [control.id,
-			world.radarFindings.filter((finding) => finding.controlIds?.includes(control.id) && !world.contained.has(finding.id)).map((finding) => ({
+			world.radarFindings.filter((finding) => finding.controlIds?.includes(control.id)).map((finding) => ({
 				...finding, url: radarFindingUrl(finding, world.repo),
 				where: finding.path + (finding.line ? `:${finding.line}` : ""),
 			}))])),
@@ -542,6 +561,7 @@ function askRadar(kind, finding, question) {
 }
 
 async function launchLocalFix(canvasId, finding, prompt) {
+	if (activeAsk) throw new CanvasError("busy", "Wait for the Copilot panel answer before launching a fix in the shared chat.");
 	const instanceId = [...servers].find(([, entry]) => entry.canvasId === canvasId)?.[0];
 	if (!instanceId) throw new CanvasError("canvas_closed", "Open the canvas before launching a fix.");
 	try {
@@ -599,7 +619,8 @@ function askCompliance(kind, control, question) {
 
 function askInPanel(job) {
 	const { canvasId, store, key } = job;
-	if (store.pending) throw new CanvasError("busy", "Copilot is still answering the previous question.");
+	if (activeAsk || store.pending) throw new CanvasError("busy", "Copilot is still answering the previous question. Wait before asking in either security canvas.");
+	activeAsk = job;
 	const thread = (store.threads[key] ??= []);
 	const entry = {
 		id: `ask-${++askSeq}`,
@@ -613,7 +634,7 @@ function askInPanel(job) {
 		prompt: job.prompt,
 		context: job.attachment ? `Attached: ${job.attachment.displayName} (lines ${job.attachment.lineRange.start}–${job.attachment.lineRange.end})` : null,
 	};
-	// A per-ask nonce ties the chat turn back to this panel, even if two canvases ask at once.
+	// A per-ask nonce ties the shared chat turn back to this panel.
 	job.nonce = `cv-${randomUUID().slice(0, 8)}`;
 	job.prompt = `${job.prompt}\n\n(Canvas request ${job.nonce}. Internal reference, do not repeat it.)`;
 	thread.push(entry);
@@ -650,6 +671,7 @@ async function runAsk(job, entry) {
 		entry.status = "done";
 		entry.note = null;
 		job.store.pending = null;
+		activeAsk = null;
 		try {
 			job.onDone?.(entry);
 		} catch {
@@ -882,12 +904,15 @@ async function refreshFromGitHub() {
 		try {
 			const dir = artifactDir();
 			await mkdir(dir, { recursive: true });
+			const temp = join(dir, `radar-cache-${randomUUID()}.tmp`);
 			await writeFile(
-				join(dir, "radar-cache.json"),
+				temp,
 				JSON.stringify({ repo, syncedAt, ...raw, settings: settings ?? world.settings }),
+				{ mode: 0o600 },
 			);
-		} catch {
-			// The cache only helps the next offline start.
+			await rename(temp, join(dir, "radar-cache.json"));
+		} catch (error) {
+			session.log(`Could not save radar cache: ${error.message}`, { level: "warning" });
 		}
 		return true;
 	} catch (error) {
@@ -947,9 +972,10 @@ async function resolveRepo() {
 	throw new Error(`Could not determine the GitHub repository for this session. Open the session in a git checkout with a GitHub origin remote.${hint}`);
 }
 
-function remember(repo) {
+async function remember(repo) {
 	world.repo = repo;
 	world.repoError = null;
+	await loadState(repo);
 	return repo;
 }
 
@@ -1177,7 +1203,6 @@ function campaignActions(canvasId) {
 	];
 }
 
-await loadState();
 let markSessionReady;
 const sessionReady = new Promise((resolve) => {
 	markSessionReady = resolve;
@@ -1191,7 +1216,7 @@ const session = await joinSession({
 			[
 				action("get_state", "Return radar blips and totals."),
 				action("refresh", "Sync open alerts from GitHub for the current repository. Falls back to the last cached sync."),
-				action("contain_finding", "Mark one mapped finding contained in this view."),
+				action("contain_finding", "Annotate one finding as contained for this repository only. Does not close alerts or change posture scores."),
 				action("explain_finding", "Ask Copilot for a short, repo-grounded explanation shown in the panel."),
 				action("assess_priority", "Propose a read-only, evidence-based AI triage priority in the discussion. Does not change GitHub severity or radar position; secrets use metadata only."),
 				action("suggest_fix", "Ask Copilot for a short remediation strategy (no code) shown in the panel."),

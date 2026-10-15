@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+
 /**
  * Pure model for the attack surface radar and NIS2 / DORA posture canvases.
  * Findings are alert metadata and remediation notes. No exploit strings live here.
@@ -16,6 +20,10 @@ const MAX_PACKAGE_BLIPS = 14;
 
 function slug(text) {
 	return String(text).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "item";
+}
+
+export function findingId(source, key) {
+	return `${source}-${slug(key)}-${createHash("sha256").update(String(key)).digest("hex").slice(0, 24)}`;
 }
 
 function worst(severities) {
@@ -56,14 +64,14 @@ function remediationFor(source, { rule = "", label = "", name = "", rollup = fal
 /**
  * Turn raw GitHub alert payloads into radar findings: one blip per code-scanning
  * rule, per secret type, and per vulnerable package. Ids derive from the rule,
- * secret type, or package name so open threads survive a refresh.
+ * secret type, or ecosystem/package key so open threads survive a refresh.
  * Secret values are never read; only the type and alert number are used.
  */
 export function buildLiveFindings({ code = [], dependabot = [], secrets = [], defaultBranch } = {}) {
 	const out = [];
 
 	for (const [ruleId, alerts] of groupBy(code, (a) => a.rule?.id ?? "unknown")) {
-		const id = `cs-${slug(ruleId)}`;
+		const id = findingId("cs", ruleId);
 		const severities = alerts.map((a) => a.rule?.security_severity_level || RULE_SEVERITY[a.rule?.severity] || "medium");
 		const locations = alerts
 			.sort((a, b) => (a.number ?? 0) - (b.number ?? 0))
@@ -100,7 +108,7 @@ export function buildLiveFindings({ code = [], dependabot = [], secrets = [], de
 	}
 
 	for (const [type, alerts] of groupBy(secrets, (a) => a.secret_type ?? "unknown")) {
-		const id = `sec-${slug(type)}`;
+		const id = findingId("sec", type);
 		const numbers = alerts.map((a) => a.number).filter(Boolean).sort((a, b) => a - b);
 		const label = alerts[0].secret_type_display_name || type;
 		out.push({
@@ -128,7 +136,7 @@ export function buildLiveFindings({ code = [], dependabot = [], secrets = [], de
 		const manifests = [...groupBy(alerts, (a) => a.dependency?.manifest_path ?? "lockfile")]
 			.sort((a, b) => b[1].length - a[1].length)
 			.map(([path]) => path);
-		const id = `dep-${slug(name)}`;
+		const id = findingId("dep", key);
 		packages.push({
 			id,
 			source: "dependabot",
@@ -864,15 +872,18 @@ const RADAR_TASK = {
 };
 
 // Free-form radar questions that ask for an actual change switch the panel to an editing prompt.
-// Git words are enough on their own; a fix verb needs to read as a request, not a "how would you" question.
+// Both code and Git changes must read as requests, not informational questions.
 const GIT_INTENT = /\b(branch|branche|commit|push|pr|pull request)\b/i;
 const FIX_VERB = /\b(fix|patch|apply|implement|edit|modify|remediate|corrige\w*|répare\w*|modifie\w*|applique\w*|implémente\w*)/i;
-const REQUEST = /(^\s*(fix|patch|apply|implement|edit|modify|remediate|corrige|répare|modifie|applique|implémente|go)\b)|\b(can you|could you|please|go ahead|do it|let'?s|peux[- ]tu|tu peux|pourrais[- ]tu|vas[- ]y|fais|stp|s'il te pla[iî]t)\b/i;
+const REQUEST = /(^\s*(fix|patch|apply|implement|edit|modify|remediate|corrige|répare|modifie|applique|implémente|go|commit|push|create|open|make|crée|ouvre)\b)|\b(can you|could you|please|go ahead|do it|let'?s|peux[- ]tu|tu peux|pourrais[- ]tu|vas[- ]y|fais|stp|s'il te pla[iî]t)\b/i;
+const GIT_ACTION = /^(?:(?:can you|could you|please|go ahead(?: and)?|let'?s|peux[- ]tu|tu peux|pourrais[- ]tu|vas[- ]y|stp)\s+)*(?:(?:commit|push)\b|(?:create|open|make|crée|ouvre)\b.*\b(?:branch|branche|pr|pull request)\b)/i;
+const READ_ONLY_QUESTION = /^(?:please\s+)?(?:which|what|where|when|why|how|does|is|are|explain|describe|tell|show|can you (?:explain|describe|tell|show)|could you (?:explain|describe|tell|show)|peux[- ]tu (?:expliquer|décrire|dire|montrer))\b/i;
 
 export function wantsChange(question = "") {
 	const text = String(question).trim();
 	if (!text) return false;
-	return GIT_INTENT.test(text) || (FIX_VERB.test(text) && REQUEST.test(text));
+	if (READ_ONLY_QUESTION.test(text)) return false;
+	return REQUEST.test(text) && (FIX_VERB.test(text) || (GIT_INTENT.test(text) && GIT_ACTION.test(text)));
 }
 
 function branchSlug(finding) {
@@ -916,9 +927,24 @@ export function assignCopilotRequest(alert, repo, bot = COPILOT_ASSIGNEE) {
 
 export function radarAttachment(finding, cwd) {
 	if (!finding.line || !finding.path || !cwd) return null;
+	const root = realpathSync(cwd);
+	const inside = (path) => {
+		const rel = relative(root, path);
+		return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+	};
+	const candidate = resolve(root, finding.path);
+	if (isAbsolute(finding.path) || !inside(candidate)) throw new Error("Alert attachment path must stay inside the repository.");
+	let path;
+	try {
+		path = realpathSync(candidate);
+	} catch (error) {
+		if (error.code === "ENOENT") return null;
+		throw error;
+	}
+	if (!inside(path)) throw new Error("Alert attachment symlink must stay inside the repository.");
 	return {
 		type: "file",
-		path: `${cwd.replace(/\/$/, "")}/${finding.path}`,
+		path,
 		displayName: `${finding.path.split("/").at(-1)}:${finding.line}`,
 		lineRange: { start: Math.max(1, finding.line - 18), end: finding.line + 14 },
 	};

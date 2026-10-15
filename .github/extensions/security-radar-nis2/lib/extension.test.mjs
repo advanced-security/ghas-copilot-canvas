@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import * as nodeModule from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate, setTimeout as sleep } from "node:timers/promises";
+import { findingId } from "./logic.mjs";
 
 const skip = typeof nodeModule.registerHooks !== "function" && "SDK mocking requires Node 22.15+";
 const ARTIFACTS = "extensions/security-radar-nis2/artifacts";
@@ -86,6 +87,7 @@ async function withExtension({ gh, seed }, body) {
 	};
 	try {
 		await import(`../extension.mjs?run-${++importSeq}`);
+		ctx.session = globalThis.canvasTestSession;
 		ctx.canvases = globalThis.canvasTestConfig.canvases;
 		ctx.invoke = (canvasId, name, input) => ctx.canvases.find((c) => c.id === canvasId).actions.find((a) => a.name === name)
 			.handler({ canvasId, input });
@@ -117,7 +119,7 @@ const codeAlert = (number, rule, path, line, severity = "warning") => ({
 	rule: { id: rule, severity, description: `Rule ${rule}` },
 	most_recent_instance: { ref: "refs/heads/main", location: { path, start_line: line } },
 });
-const campaignId = (index) => `cs-js-campaign-${index}`;
+const campaignId = (index) => findingId("cs", `js/campaign-${index}`);
 const liveCode = Array.from({ length: 8 }, (_, index) => codeAlert(index + 100, `js/campaign-${index}`, "src/test.js", index + 1));
 const workflowAlert = codeAlert(150, "actions/unpinned-tag", ".github/workflows/ci.yml", 12);
 const liveSecrets = [{ number: 200, state: "open", secret_type: "provider_key", secret: "NEVER-COPY-ME" }];
@@ -230,9 +232,9 @@ test("auto-syncs live alerts on first open and builds generic finding ids", { sk
 		assert.deepEqual(radar.totals, { codeScanning: 9, dependabot: 1, secretScanning: 1, asOf: radar.totals.asOf });
 		const ids = radar.findings.map((f) => f.id);
 		assert.ok(ids.includes(campaignId(0)));
-		assert.ok(ids.includes("cs-actions-unpinned-tag"));
-		assert.ok(ids.includes("dep-lodash"));
-		assert.ok(ids.includes("sec-provider-key"));
+		assert.ok(ids.includes(findingId("cs", "actions/unpinned-tag")));
+		assert.ok(ids.includes(findingId("dep", "npm/lodash")));
+		assert.ok(ids.includes(findingId("sec", "provider_key")));
 		assert.doesNotMatch(JSON.stringify(radar), /NEVER-COPY-ME/);
 		const posture = await h.invoke("compliance-scoreboard", "get_state", {});
 		assert.equal(posture.source, "github");
@@ -240,6 +242,114 @@ test("auto-syncs live alerts on first open and builds generic finding ids", { sk
 		const cache = await h.waitFor(() => readFile(join(h.home, ARTIFACTS, "radar-cache.json"), "utf8").then(JSON.parse, () => null));
 		assert.equal(cache.repo, "acme/widgets");
 		assert.doesNotMatch(JSON.stringify(cache), /NEVER-COPY-ME/);
+		assert.equal((await stat(join(h.home, ARTIFACTS, "radar-cache.json"))).mode & 0o777, 0o600);
+	});
+});
+
+test("containment annotations are repository-scoped and cannot change live posture or campaign scope", { skip }, async () => {
+	const id = campaignId(0);
+	const seed = async (dir) => {
+		await mkdir(dir, { recursive: true });
+		await writeFile(join(dir, "state.json"), JSON.stringify({ contained: [id] }));
+		await writeFile(join(dir, "state-someone%2Felse.json"), JSON.stringify({ repo: "someone/else", contained: [id] }));
+	};
+	let saved;
+	await withExtension({ gh: githubMock(), seed }, async (h) => {
+		const radar = await synced(h);
+		assert.equal(radar.findings.some((finding) => finding.contained), false, "ignore legacy and other-repository state");
+		const baseline = await h.invoke("compliance-scoreboard", "get_state", {});
+		await h.invoke("attack-surface-radar", "contain_finding", { id });
+		assert.equal((await h.invoke("attack-surface-radar", "get_state", {})).findings.find((finding) => finding.id === id).contained, true);
+		const annotated = await h.invoke("compliance-scoreboard", "get_state", {});
+		assert.deepEqual(annotated.controls, baseline.controls);
+		assert.deepEqual(annotated.campaignThemes, baseline.campaignThemes);
+		assert.equal(annotated.score, baseline.score);
+		assert.equal(annotated.projected, baseline.projected);
+		saved = await readFile(join(h.home, ARTIFACTS, "state-acme%2Fwidgets.json"), "utf8");
+		assert.deepEqual(JSON.parse(saved), { repo: "acme/widgets", contained: [id] });
+	});
+	for (const repo of ["acme/widgets", "someone/else"]) {
+		await withExtension({
+			gh: githubMock({ repo }),
+			seed: async (dir) => {
+				await mkdir(dir, { recursive: true });
+				await writeFile(join(dir, "state-acme%2Fwidgets.json"), saved);
+			},
+		}, async (h) => {
+			const state = await synced(h);
+			assert.equal(state.findings.find((finding) => finding.id === id).contained, repo === "acme/widgets");
+		});
+	}
+});
+
+test("existing permissive caches become owner-only on offline restore and live replacement", { skip }, async () => {
+	for (const offline of [false, true]) {
+		const live = githubMock();
+		await withExtension({
+			gh: (command, args, options) => {
+				if (offline && args[0] !== "repo") throw new Error("network down");
+				return live(command, args, options);
+			},
+			seed: async (dir) => {
+				await mkdir(dir, { recursive: true });
+				await writeFile(join(dir, "radar-cache.json"), JSON.stringify({
+					repo: "acme/widgets", code: liveCode, dependabot: [], secrets: [], syncedAt: "yesterday",
+				}), { mode: 0o644 });
+			},
+		}, async (h) => {
+			await settled(h, (state) => offline ? state.refreshError : state.source === "github");
+			assert.equal((await stat(join(h.home, ARTIFACTS, "radar-cache.json"))).mode & 0o777, 0o600);
+		});
+	}
+});
+
+test("panel asks are serialized across both canvases and release the shared guard after failure", { skip }, async () => {
+	await withExtension({ gh: githubMock() }, async (h) => {
+		await synced(h);
+		const emit = (type, data) => {
+			for (const handler of h.handlers.get(type) ?? []) handler({ data });
+		};
+		h.session.send = async (message) => { h.sent.push(message); };
+		for (const first of ["attack-surface-radar", "compliance-scoreboard"]) {
+			const other = first === "attack-surface-radar" ? "compliance-scoreboard" : "attack-surface-radar";
+			const input = (canvas) => ({ id: canvas === "attack-surface-radar" ? campaignId(0) : "vuln", question: "Explain the risk" });
+			await h.invoke(first, "ask_copilot", input(first));
+			const count = h.sent.length;
+			await assert.rejects(h.invoke(other, "ask_copilot", input(other)), /previous question/);
+			assert.equal(h.sent.length, count, "a rejected ask must not send an interleaving prompt");
+			emit("user.message", { content: h.sent.at(-1).prompt });
+			emit("assistant.message", { content: `Answer for ${first}` });
+			await h.waitFor(async () => !(await h.invoke(first, "get_state", {})).pending);
+			const entry = (await h.invoke(first, "get_state", {})).threads[input(first).id].at(-1);
+			assert.equal(entry.answer, `Answer for ${first}`);
+			assert.equal(entry.offline, false);
+		}
+		h.session.send = async () => { throw new Error("send unavailable"); };
+		await h.invoke("attack-surface-radar", "explain_finding", { id: campaignId(0) });
+		await settled(h, (state) => !state.pending);
+		h.session.send = async (message) => { h.sent.push(message); };
+		await h.invoke("compliance-scoreboard", "draft_plan", { id: "vuln" });
+		emit("user.message", { content: h.sent.at(-1).prompt });
+		emit("assistant.message", { content: "Recovered answer" });
+		await h.waitFor(async () => !(await h.invoke("compliance-scoreboard", "get_state", {})).pending);
+	});
+});
+
+test("read-only Git questions stay in the panel and unsafe alert attachments are rejected before sending", { skip }, async () => {
+	await withExtension({ gh: githubMock() }, async (h) => {
+		await synced(h);
+		for (const question of ["Which branch contains this alert?", "What commit introduced it?", "Please review this PR"]) {
+			await h.invoke("attack-surface-radar", "ask_copilot", { id: campaignId(0), question });
+			await settled(h, (state) => !state.pending);
+			assert.doesNotMatch(h.sent.at(-1).prompt, /Use create_session/);
+			assert.deepEqual((await h.invoke("attack-surface-radar", "get_state", {})).localFixes, {});
+		}
+	});
+	await withExtension({ gh: githubMock({ code: [codeAlert(1, "unsafe/path", "../outside.js", 2)] }) }, async (h) => {
+		const state = await synced(h);
+		await assert.rejects(h.invoke("attack-surface-radar", "explain_finding", { id: state.findings.find((finding) => finding.source === "code-scanning").id }), /must stay inside the repository/);
+		assert.equal(h.sent.length, 0);
+		assert.equal((await h.invoke("attack-surface-radar", "get_state", {})).pending, null);
 	});
 });
 
@@ -287,9 +397,9 @@ test("uses the cached sync only for the same repository and says when it is stal
 	await withExtension({ gh: offline, seed: cacheFor("acme/widgets") }, async (h) => {
 		const state = await settled(h, (current) => current.refreshError);
 		assert.equal(state.source, "cache");
-		assert.deepEqual(state.findings.map((f) => f.id), ["cs-js-sql-injection"]);
+		assert.deepEqual(state.findings.map((f) => f.id), [findingId("cs", "js/sql-injection")]);
 		assert.match(state.refreshError, /Could not reach GitHub \(network down\)\. Showing the last sync from 2024-01-02 03:04\./);
-		await assert.rejects(h.invoke("attack-surface-radar", "prepare_campaign", { ids: ["cs-js-sql-injection"], kind: "code" }), /Cached alerts cannot be published/);
+		await assert.rejects(h.invoke("attack-surface-radar", "prepare_campaign", { ids: [findingId("cs", "js/sql-injection")], kind: "code" }), /Cached alerts cannot be published/);
 	});
 	await withExtension({ gh: offline, seed: cacheFor("someone/else") }, async (h) => {
 		const state = await settled(h, (current) => current.refreshError);
@@ -369,7 +479,7 @@ test("canvas HTTP actions share isolated launches, assignments and reviewed camp
 		const posture = await invoke("compliance-scoreboard", "get_state", {});
 		const control = posture.controls.find((c) => c.id === "supply");
 		const selectedDependency = control.findings.find((f) => f.source === "dependabot");
-		assert.equal(selectedDependency.id, "dep-lodash");
+		assert.equal(selectedDependency.id, findingId("dep", "npm/lodash"));
 		const postureOpen = h.opens.find((o) => o.canvas.id === "compliance-scoreboard");
 		const opened = await postureOpen.canvas.open({ instanceId: postureOpen.instanceId });
 		const response = await fetch(`${opened.url}api/action`, {
@@ -511,7 +621,7 @@ test("canvas HTTP actions share isolated launches, assignments and reviewed camp
 			assert.equal(radarReset.assigned[round.id].number, 42);
 			assert.equal(postureReset.assigned[round.id].number, 42);
 			assert.deepEqual(JSON.parse(await readFile(join(home, ARTIFACTS, "local-fixes-test-parent.json"), "utf8")), {});
-			assert.deepEqual(JSON.parse(await readFile(join(home, ARTIFACTS, "state.json"), "utf8")), { contained: [] });
+			assert.deepEqual(JSON.parse(await readFile(join(home, ARTIFACTS, "state-acme%2Fwidgets.json"), "utf8")), { repo: "acme/widgets", contained: [] });
 		}
 		assert.equal(sent.length, beforeResetSent, "reset must not send commands to existing sessions");
 		assert.equal(requests.length, beforeResetRequests, "reset must not change real GitHub assignments");

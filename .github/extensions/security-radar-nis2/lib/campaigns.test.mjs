@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CAMPAIGN_REFRESH_MS, campaignFields, campaignScope, createCampaignService, scheduleCampaignProgress } from "./campaigns.mjs";
-import { buildLiveFindings, complianceModel, remediationProjection } from "./logic.mjs";
+import { buildLiveFindings, complianceModel, findingId, remediationProjection } from "./logic.mjs";
 import { renderPage } from "./pages.mjs";
 
 const repo = "acme/widgets";
@@ -523,7 +523,7 @@ test("dependency planning previews all packages, sends only selected updates, an
 	const all = element({ act: "select_dependency_theme", control: "supply" });
 	const draft = element({ act: "draft_dependency_plan", control: "supply" });
 	const clear = element({ act: "clear_dependency_selection", control: "supply" });
-	const bad = element({ act: "toggle_dependency_selection", control: "supply", id: "cs-actions-unpinned-tag" });
+	const bad = element({ act: "toggle_dependency_selection", control: "supply", id: findingId("cs", "actions/unpinned-tag") });
 	const r = renderer("compliance-scoreboard", model, [select, all, draft, clear, bad]);
 	await select.handlers.click();
 	let out = r.draws.at(-1);
@@ -588,7 +588,7 @@ test("dependency plans and workflow campaign previews stay separate when switchi
 		campaignThemes: { supply: findings.filter((f) => f.controlIds.includes("supply")) } };
 	const select = element({ act: "select", id: "supply" });
 	const deps = element({ act: "select_dependency_theme", control: "supply" });
-	const code = element({ act: "toggle_campaign_selection", control: "supply", id: "cs-actions-unpinned-tag" });
+	const code = element({ act: "toggle_campaign_selection", control: "supply", id: findingId("cs", "actions/unpinned-tag") });
 	const show = element({ act: "show_dependency_preview", control: "supply" });
 	const r = renderer("compliance-scoreboard", model, [select, deps, code, show]);
 	await select.handlers.click();
@@ -615,7 +615,7 @@ test("posture campaign hatching covers all impacted themes without adding the Co
 			supply: findings.filter((f) => f.controlIds.includes("supply")), vuln: findings.filter((f) => f.controlIds.includes("vuln")) },
 	};
 	const select = element({ act: "select", id: "change" });
-	const pick = element({ act: "toggle_campaign_selection", control: "change", id: "cs-actions-unpinned-tag" });
+	const pick = element({ act: "toggle_campaign_selection", control: "change", id: findingId("cs", "actions/unpinned-tag") });
 	const clear = element({ act: "clear_campaign_selection", control: "change" });
 	const r = renderer("compliance-scoreboard", model, [select, pick, clear]);
 	await select.handlers.click();

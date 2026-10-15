@@ -25,7 +25,7 @@ Two Copilot canvases that turn the **open GitHub Advanced Security alerts of the
 - **Preview the lift**: `toggle_preview` shows the projected score once the critical and high findings are fixed.
 - **Copilot drafts**: `draft_plan` (30-day remediation plan), `draft_board`, `ask_auditor`, `draft_dependency_plan`, `draft_evidence` and `ask_copilot`. All are read-only and advisory.
 - **Posture brief**: `generate_brief` writes `audit-brief.md` to the extension artifact directory.
-- **Campaigns**: create and track GitHub security campaigns for code scanning or secret scanning alerts (up to 1000 alerts, default-branch alerts for code).
+- **Campaigns**: create and track GitHub security campaigns for code scanning alerts (up to 1000 default-branch alerts). For secret scanning, the canvas only prepares selected alert numbers and links to GitHub; it does not create or track secret campaigns.
 - Fix execution stays in the radar (`fix_locally`, `assign_copilot` also work from a theme).
 
 ## Data and state
@@ -33,6 +33,8 @@ Two Copilot canvases that turn the **open GitHub Advanced Security alerts of the
 - On first open the canvases are empty ("No data yet") and sync from GitHub automatically. Use `refresh` to sync again.
 - The repository is resolved from the session checkout with `gh repo view`, falling back to the `origin` remote.
 - A GitHub sync is cached per repository under `~/.copilot/extensions/security-radar-nis2/artifacts/` (or `$COPILOT_HOME`) and only used when it matches the current repository.
+- Cached security metadata is owner-readable only. Containment annotations are saved separately per repository; legacy unscoped annotations are ignored. Annotations do not close GitHub alerts, remove campaign scope or change posture scores.
+- Copilot panel questions share one chat session: wait for an answer before asking in either canvas. Read-only questions about branches, commits or pull requests do not launch fix sessions.
 - If an alert type is not enabled (HTTP 403/404), it counts as empty; the sync only fails if all three are unavailable.
 
 ## Requirements

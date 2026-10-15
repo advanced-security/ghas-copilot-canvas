@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	CONTROLS,
 	EMPTY_TOTALS,
@@ -21,6 +24,7 @@ import {
 	explainPromptForFinding,
 	findBannedPhrase,
 	findingBrief,
+	findingId,
 	isCopilotLogin,
 	layoutFindings,
 	parseRemoteRepo,
@@ -38,6 +42,13 @@ import {
 import { CANVAS_IDS, renderPage } from "./pages.mjs";
 
 const REPO = "acme/widgets";
+const SQL = findingId("cs", "js/sql-injection");
+const PATH = findingId("cs", "js/path-injection");
+const UNPINNED = findingId("cs", "actions/unpinned-tag");
+const PERMISSIONS = findingId("cs", "actions/excessive-permissions");
+const TOKEN = findingId("sec", "github_personal_access_token");
+const LODASH = findingId("dep", "npm/lodash");
+const MINIMIST = findingId("dep", "npm/minimist");
 
 const cs = (number, rule, severity, path, line, ref = "refs/heads/main") => ({
 	number,
@@ -115,22 +126,22 @@ test("live radar groups GitHub alerts under generic ids and drops alert details"
 	assert.equal(JSON.stringify(raw).includes("dropped"), false);
 	const list = buildLiveFindings({ ...raw, defaultBranch: "main" });
 	const ids = list.map((f) => f.id);
-	assert.equal(ids[0], "cs-js-sql-injection");
-	for (const id of ["cs-js-path-injection", "cs-actions-unpinned-tag", "sec-github-personal-access-token", "dep-lodash", "dep-minimist", "dep-rest"]) {
+	assert.equal(ids[0], SQL);
+	for (const id of [PATH, UNPINNED, TOKEN, LODASH, MINIMIST, "dep-rest"]) {
 		assert.ok(ids.includes(id), id);
 	}
-	assert.equal(byId(list, "cs-js-path-injection").count, 2);
-	assert.equal(byId(list, "cs-js-path-injection").severity, "high");
-	assert.deepEqual(byId(list, "dep-lodash").bySeverity, { critical: 0, high: 2, medium: 1, low: 0 });
+	assert.equal(byId(list, PATH).count, 2);
+	assert.equal(byId(list, PATH).severity, "high");
+	assert.deepEqual(byId(list, LODASH).bySeverity, { critical: 0, high: 2, medium: 1, low: 0 });
 	const rest = byId(list, "dep-rest");
 	assert.equal(rest.count, 2);
 	assert.equal(rest.packages, 2);
 	assert.deepEqual(rest.packageNames.sort(), ["small", "tiny"]);
 	assert.equal(list.reduce((sum, f) => sum + f.count, 0), 12);
-	assert.deepEqual(byId(list, "cs-actions-unpinned-tag").controlIds, ["change", "supply"]);
-	assert.deepEqual(byId(list, "cs-actions-excessive-permissions").controlIds, ["change"]);
-	assert.deepEqual(byId(list, "cs-js-sql-injection").controlIds, ["vuln"]);
-	assert.deepEqual(byId(list, "sec-github-personal-access-token").controlIds, ["secrets"]);
+	assert.deepEqual(byId(list, UNPINNED).controlIds, ["change", "supply"]);
+	assert.deepEqual(byId(list, PERMISSIONS).controlIds, ["change"]);
+	assert.deepEqual(byId(list, SQL).controlIds, ["vuln"]);
+	assert.deepEqual(byId(list, TOKEN).controlIds, ["secrets"]);
 	const kpis = radarKpis(list, TOTALS);
 	assert.equal(kpis.open, 12);
 	assert.equal(kpis.mapped, 12);
@@ -140,6 +151,56 @@ test("live radar groups GitHub alerts under generic ids and drops alert details"
 	const laid = layoutFindings(list);
 	assert.equal(laid.length, list.length);
 	for (const f of laid) assert.ok(Number.isFinite(f.x) && Number.isFinite(f.y), f.id);
+});
+
+test("finding IDs preserve complete source keys despite ecosystem, punctuation, case and truncation collisions", () => {
+	const keys = ["shared", "Shared", "a/b", "a-b", `${"x".repeat(60)}a`, `${"x".repeat(60)}b`];
+	const raw = {
+		code: keys.map((key, i) => cs(i + 1, key, "high", "src/app.js", i + 1)),
+		secrets: keys.map((key, i) => secret(i + 1, key)),
+		dependabot: ["npm", "pip"].flatMap((ecosystem) => keys.map((name, i) => ({
+			...dep(i + 1, name, "high"), dependency: { package: { ecosystem, name }, manifest_path: "lockfile" },
+		}))),
+	};
+	const list = buildLiveFindings(raw);
+	assert.equal(list.length, keys.length * 4);
+	assert.equal(new Set(list.map((finding) => finding.id)).size, list.length);
+	assert.ok(list.every((finding) => /-[0-9a-f]{24}$/.test(finding.id)));
+	const ids = new Map(list.map((finding) => [`${finding.source}/${finding.rule}`, finding.id]));
+	const reordered = buildLiveFindings({
+		code: [...raw.code].reverse(), secrets: [...raw.secrets].reverse(), dependabot: [...raw.dependabot].reverse(),
+	});
+	assert.deepEqual(new Map(reordered.map((finding) => [`${finding.source}/${finding.rule}`, finding.id])), ids);
+	const layout = layoutFindings(list);
+	assert.equal(new Set(layout.map(({ x, y }) => `${x},${y}`)).size, list.length);
+	assert.notEqual(findingId("dep", "npm/shared"), findingId("dep", "pip/shared"));
+	assert.notEqual(findingId("cs", "same"), findingId("sec", "same"));
+});
+
+test("radar attachments resolve canonical paths and reject traversal and symlink escapes", (t) => {
+	const fixture = mkdtempSync(join(tmpdir(), "radar-attachment-"));
+	t.after(() => rmSync(fixture, { recursive: true }));
+	const root = join(fixture, "repo");
+	const sibling = join(fixture, "repo-other");
+	mkdirSync(join(root, "src"), { recursive: true });
+	mkdirSync(sibling);
+	writeFileSync(join(root, "src/app.js"), "safe fixture");
+	writeFileSync(join(sibling, "outside.js"), "outside fixture");
+	symlinkSync(root, join(fixture, "checkout"));
+	symlinkSync(join(root, "src/app.js"), join(root, "internal.js"));
+	symlinkSync(join(sibling, "outside.js"), join(root, "external.js"));
+	symlinkSync(sibling, join(root, "external-dir"));
+	const finding = { line: 52, path: "src/app.js" };
+	const attachment = radarAttachment(finding, join(fixture, "checkout"));
+	assert.equal(attachment.type, "file");
+	assert.equal(attachment.path, realpathSync(join(root, finding.path)));
+	assert.deepEqual(attachment.lineRange, { start: 34, end: 66 });
+	assert.equal(radarAttachment({ ...finding, path: "internal.js" }, root).path, attachment.path);
+	for (const path of ["../repo-other/outside.js", "src/../../repo-other/outside.js", "/", root, join(root, "src/app.js"), "external.js", "external-dir/outside.js"]) {
+		assert.throws(() => radarAttachment({ ...finding, path }, root), /must stay inside the repository/, path);
+	}
+	assert.equal(radarAttachment({ ...finding, path: "not-in-checkout.js" }, root), null);
+	assert.equal(radarAttachment({ path: "secret metadata" }, root), null);
 });
 
 test("an empty sync produces empty, finite models", () => {
@@ -181,13 +242,13 @@ test("critical and high findings drive the preview and the projected score", () 
 
 test("campaign projections share scoring floors, evidence gaps, and overlapping theme deductions", () => {
 	const list = [
-		{ ...byId(findings(), "cs-actions-unpinned-tag"), campaignCount: 1 },
-		{ ...byId(findings(), "cs-actions-excessive-permissions"), campaignCount: 1 },
-		{ ...byId(findings(), "dep-lodash") },
+		{ ...byId(findings(), UNPINNED), campaignCount: 1 },
+		{ ...byId(findings(), PERMISSIONS), campaignCount: 1 },
+		{ ...byId(findings(), LODASH) },
 	];
 	const model = complianceModel([], list);
-	const projection = campaignProjection(model.controls, ["cs-actions-unpinned-tag", "cs-actions-unpinned-tag", "dep-lodash", "closed"]);
-	const resolved = complianceModel(["cs-actions-unpinned-tag"], list);
+	const projection = campaignProjection(model.controls, [UNPINNED, UNPINNED, LODASH, "closed"]);
+	const resolved = complianceModel([UNPINNED], list);
 	assert.equal(projection.score, resolved.score);
 	assert.equal(projection.groups, 1);
 	assert.equal(projection.alerts, 1);
@@ -197,7 +258,7 @@ test("campaign projections share scoring floors, evidence gaps, and overlapping 
 	assert.ok(projection.lift > 0);
 
 	const saturated = complianceModel([], Array.from({ length: 3 }, (_, i) => ({
-		...byId(findings(), "cs-js-sql-injection"), id: `critical-${i}`, count: 10, campaignCount: 1,
+		...byId(findings(), SQL), id: `critical-${i}`, count: 10, campaignCount: 1,
 	})));
 	assert.equal(campaignProjection(saturated.controls, ["critical-0"]).lift, 0);
 	assert.ok(campaignProjection(saturated.controls, ["critical-0", "critical-1"]).lift > 0);
@@ -235,11 +296,11 @@ test("campaign projection retains branch exclusions and recalculates the remaini
 test("dependency-plan projections resolve only selected dependency groups and preserve workflow/evidence deductions", () => {
 	const list = [
 		...findings().filter((f) => f.source === "dependabot"),
-		byId(findings(), "cs-actions-unpinned-tag"),
+		byId(findings(), UNPINNED),
 	];
 	const model = complianceModel([], list);
 	const ids = list.filter((f) => f.source === "dependabot").map((f) => f.id);
-	const projected = remediationProjection(model.controls, [...ids, ids[0], "cs-actions-unpinned-tag"], "dependencies");
+	const projected = remediationProjection(model.controls, [...ids, ids[0], UNPINNED], "dependencies");
 	const resolved = complianceModel(ids, list);
 	assert.equal(projected.score, resolved.score);
 	assert.equal(projected.lift, resolved.score - model.score);
@@ -299,12 +360,12 @@ test("compliance mapping uses the corrected articles and evidence gaps", () => {
 
 test("alert links and briefs use the resolved repository and live totals", () => {
 	const list = findings();
-	const lodash = byId(list, "dep-lodash");
-	const sql = byId(list, "cs-js-sql-injection");
+	const lodash = byId(list, LODASH);
+	const sql = byId(list, SQL);
 	assert.equal(alertUrl(lodash), null);
 	assert.match(alertUrl(lodash, REPO), /^https:\/\/github\.com\/acme\/widgets\/security\/dependabot\?q=is%3Aopen%20package%3Alodash/);
 	assert.match(alertUrl(sql, REPO), /code-scanning\?query=is%3Aopen%20rule%3Ajs%2Fsql-injection/);
-	assert.match(alertUrl(byId(list, "sec-github-personal-access-token"), REPO), /\/security\/secret-scanning$/);
+	assert.match(alertUrl(byId(list, TOKEN), REPO), /\/security\/secret-scanning$/);
 	assert.match(alertUrl(byId(list, "dep-rest"), REPO), /\/security\/dependabot$/);
 	const model = complianceModel([], list, { totals: TOTALS, repo: REPO });
 	assert.equal(model.repo, REPO);
@@ -417,7 +478,7 @@ test("compliance findings focus on campaigns instead of individual fix execution
 
 test("Medium workflow findings do not enter the Critical/High lift preview and the page explains why", () => {
 	const medium = (id, rule, count) => ({
-		...byId(findings(), "cs-actions-excessive-permissions"), id, rule, count, severity: "medium", bySeverity: { critical: 0, high: 0, medium: count, low: 0 },
+		...byId(findings(), PERMISSIONS), id, rule, count, severity: "medium", bySeverity: { critical: 0, high: 0, medium: count, low: 0 },
 	});
 	const list = [medium("cs-actions-a", "actions/a", 8), medium("cs-actions-b", "actions/b", 2), medium("cs-actions-c", "actions/c", 1)];
 	const options = { evidence: { codeowners: false } };
@@ -474,16 +535,16 @@ test("copy never carries payloads or secret shapes", () => {
 
 test("briefs are generic, derived from the finding and safe per source", () => {
 	const list = findings();
-	const sql = findingBrief(byId(list, "cs-js-sql-injection"));
+	const sql = findingBrief(byId(list, SQL));
 	assert.equal(sql.filePath, "src/app.js");
 	assert.match(sql.what, /js\/sql-injection/);
 	assert.match(sql.where, /src\/app\.js around line 52/);
 	assert.match(sql.why, /critical severity/);
-	const lodash = findingBrief(byId(list, "dep-lodash"));
+	const lodash = findingBrief(byId(list, LODASH));
 	assert.match(lodash.what, /3 open Dependabot alerts on the package lodash/);
 	assert.match(lodash.where, /package-lock\.json/);
 	assert.equal(lodash.filePath, "package-lock.json");
-	const token = findingBrief(byId(list, "sec-github-personal-access-token"));
+	const token = findingBrief(byId(list, TOKEN));
 	assert.equal(token.filePath, null);
 	assert.match(token.what, /never loaded/);
 	const rest = findingBrief(byId(list, "dep-rest"));
@@ -493,9 +554,9 @@ test("briefs are generic, derived from the finding and safe per source", () => {
 		assert.ok(finding.remediation.length > 20, finding.id);
 		assert.equal(findBannedPhrase(finding.remediation), null, finding.id);
 	}
-	assert.match(byId(list, "sec-github-personal-access-token").remediation, /revoke|rotate/i);
-	assert.match(byId(list, "dep-lodash").remediation, /lodash/);
-	const form = explainPromptForFinding(byId(list, "dep-lodash"), REPO);
+	assert.match(byId(list, TOKEN).remediation, /revoke|rotate/i);
+	assert.match(byId(list, LODASH).remediation, /lodash/);
+	const form = explainPromptForFinding(byId(list, LODASH), REPO);
 	assert.match(form, /closer to the center/);
 	assert.match(form, /acme\/widgets/);
 	assert.equal(findBannedPhrase(form), null);
@@ -504,8 +565,8 @@ test("briefs are generic, derived from the finding and safe per source", () => {
 test("radar distance is severity and briefs stay safe", () => {
 	const laid = layoutFindings([
 		...findings(),
-		...["a", "b", "c", "d", "e"].map((x, i) => ({ ...byId(findings(), "cs-js-sql-injection"), id: `crit-${x}`, severity: i % 2 ? "critical" : "high" })),
-		...["a", "b", "c", "d", "e", "f"].map((x) => ({ ...byId(findings(), "cs-actions-unpinned-tag"), id: `med-${x}` })),
+		...["a", "b", "c", "d", "e"].map((x, i) => ({ ...byId(findings(), SQL), id: `crit-${x}`, severity: i % 2 ? "critical" : "high" })),
+		...["a", "b", "c", "d", "e", "f"].map((x) => ({ ...byId(findings(), UNPINNED), id: `med-${x}` })),
 	]);
 	const distance = (finding) => Math.hypot(finding.x - 50, finding.y - 50);
 	const critical = laid.filter((finding) => finding.severity === "critical");
@@ -586,7 +647,7 @@ test("pages render two English canvases and a friendly empty state", () => {
 	assert.doesNotMatch(radarHtml, /Open the file|Also in this file|Mark contained|SAY THIS|Why this distance/i);
 	assert.doesNotMatch(radarHtml, /class="sweep"/);
 	const withKpis = page("attack-surface-radar", radarState({
-		threads: { "cs-js-sql-injection": [{ id: "a1", kind: "explain", question: "Explain the vuln", status: "done", answer: "**Risk**: the query.\n- Bind values", offline: false }] },
+		threads: { [SQL]: [{ id: "a1", kind: "explain", question: "Explain the vuln", status: "done", answer: "**Risk**: the query.\n- Bind values", offline: false }] },
 	})).out;
 	assert.match(withKpis, /Quick wins/);
 	assert.match(withKpis, /Top priority/);
@@ -639,7 +700,7 @@ test("radar KPIs and Copilot prompts stay short and safe", () => {
 	assert.equal(k.quickWinBumps, 2);
 	assert.equal(k.quickWinAlerts, 4);
 	assert.equal(k.secrets, 1);
-	const critical = byId(list, "cs-js-sql-injection");
+	const critical = byId(list, SQL);
 	for (const kind of ["explain", "fix", "ask"]) {
 		const prompt = radarPrompt(kind, critical, "Who can reach this?", { attached: true, repo: REPO });
 		assert.equal(findBannedPhrase(prompt), null);
@@ -649,10 +710,6 @@ test("radar KPIs and Copilot prompts stay short and safe", () => {
 		assert.match(prompt, /Do not call any tools/);
 	}
 	assert.match(radarPrompt("explain", critical), /on this repository\./);
-	const attachment = radarAttachment(critical, "/repo/");
-	assert.equal(attachment.type, "file");
-	assert.equal(attachment.path, "/repo/src/app.js");
-	assert.ok(attachment.lineRange.start < critical.line && attachment.lineRange.end > critical.line);
 	const secretFinding = list.find((f) => f.source === "secret-scanning");
 	assert.equal(radarAttachment(secretFinding, "/repo"), null);
 	assert.match(radarPrompt("explain", secretFinding), /Never look up or display a secret value/);
@@ -686,7 +743,7 @@ test("contextual priority prompts permit bounded evidence reads without changing
 });
 
 test("execution canvases link to launched sessions while the posture canvas stays campaign-focused", () => {
-	const id = "cs-js-sql-injection";
+	const id = SQL;
 	const local = { status: "launched", sessionId: "test-child", appUrl: "ghapp://sessions/test-child" };
 	const pages = {
 		"attack-surface-radar": radarState({ findings: layoutFindings([byId(findings(), id)]), localFixes: { [id]: local } }),
@@ -712,13 +769,22 @@ test("radar free-form requests to change code get an editing prompt on a neutral
 		"corrige ça dans une branche",
 		"tu peux corriger la vuln ?",
 		"Please patch it and commit",
+		"Commit this fix",
+		"Push the current branch",
+		"Could you open a pull request?",
 	]) {
 		assert.equal(wantsChange(q), true, q);
 	}
-	for (const q of ["How bad is this?", "Who can reach this?", "how would you fix this?", "Explain the fix direction", ""]) {
+	for (const q of [
+		"How bad is this?", "Who can reach this?", "how would you fix this?", "Explain the fix direction", "",
+		"Which branch contains this alert?", "What commit introduced it?", "What should I check before push?",
+		"Is there a PR for this?", "Can you explain how to fix this in a branch?",
+		"Please explain this commit", "Please review this PR", "Could you show the branch?",
+		"Peux-tu expliquer ce commit ?", "Quelle branche contient cette alerte ?",
+	]) {
 		assert.equal(wantsChange(q), false, q);
 	}
-	const critical = byId(findings(), "cs-js-sql-injection");
+	const critical = byId(findings(), SQL);
 	const prompt = radarPrompt("change", critical, "fix it in a branch", { attached: true, repo: REPO });
 	assert.equal(findBannedPhrase(prompt), null);
 	assert.doesNotMatch(prompt, /Do not call any tools|do not edit files/);
@@ -729,7 +795,7 @@ test("radar free-form requests to change code get an editing prompt on a neutral
 });
 
 test("assign to Copilot targets the shown alert in the resolved repo and keeps human assignees", () => {
-	const finding = byId(findings(), "cs-js-path-injection");
+	const finding = byId(findings(), PATH);
 	const alerts = [
 		{ number: 9, rule: { id: finding.rule }, state: "open", most_recent_instance: { location: { path: "x.js", start_line: 1 } } },
 		{ number: 3, rule: { id: finding.rule }, state: "open", assignees: [{ login: "mona" }], most_recent_instance: { location: { path: finding.path, start_line: finding.line } } },
@@ -757,12 +823,12 @@ test("assign to Copilot targets the shown alert in the resolved repo and keeps h
 	assert.equal(radarFindingUrl(live[0], REPO), live[0].htmlUrl);
 	assert.match(radarFindingUrl(finding, REPO), /^https:\/\/github\.com\/acme\/widgets\/security\/code-scanning\?query=/);
 	assert.equal(canAssignCopilot(finding), true);
-	assert.equal(canAssignCopilot(byId(findings(), "dep-lodash")), false);
-	assert.equal(canAssignCopilot(byId(findings(), "sec-github-personal-access-token")), false);
+	assert.equal(canAssignCopilot(byId(findings(), LODASH)), false);
+	assert.equal(canAssignCopilot(byId(findings(), TOKEN)), false);
 });
 
 test("radar offline answers are useful for every ask kind", () => {
-	const finding = byId(findings(), "cs-js-sql-injection");
+	const finding = byId(findings(), SQL);
 	for (const kind of ["explain", "fix", "ask", "change"]) {
 		const answer = radarOfflineAnswer(kind, finding);
 		assert.ok(answer.length > 40, kind);
@@ -776,8 +842,8 @@ test("radar offline answers are useful for every ask kind", () => {
 test("radar reshuffle moves bearings but keeps every finding in its band", () => {
 	const list = [
 		...findings(),
-		...["a", "b", "c", "d"].map((x) => ({ ...byId(findings(), "cs-js-path-injection"), id: `high-${x}` })),
-		...["a", "b", "c"].map((x) => ({ ...byId(findings(), "cs-actions-unpinned-tag"), id: `med-${x}` })),
+		...["a", "b", "c", "d"].map((x) => ({ ...byId(findings(), PATH), id: `high-${x}` })),
+		...["a", "b", "c"].map((x) => ({ ...byId(findings(), UNPINNED), id: `med-${x}` })),
 	];
 	const base = layoutFindings(list);
 	const band = { critical: [14.2, 20.8], high: [24.4, 36.6], medium: [40.6, 44.2], low: [45, 46.2] };
@@ -804,7 +870,7 @@ test("radar reshuffle moves bearings but keeps every finding in its band", () =>
 
 test("radar only replays the arrival when a sync brings a new layout", () => {
 	const base = radarState({
-		findings: layoutFindings([{ ...byId(findings(), "cs-js-path-injection"), count: 30 }]),
+		findings: layoutFindings([{ ...byId(findings(), PATH), count: 30 }]),
 		layoutSeed: 1,
 	});
 	const html = renderPage("attack-surface-radar", base);
