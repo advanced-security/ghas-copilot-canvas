@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import * as nodeModule from "node:module";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate, setTimeout as sleep } from "node:timers/promises";
@@ -140,7 +141,13 @@ function githubMock({ code = [...liveCode, workflowAlert], dependabot = liveDepe
 		if (args.includes("user")) return { stdout: JSON.stringify({ login: "mona" }) };
 		const path = args.find((value) => value.startsWith("repos/") || value.startsWith("orgs/"));
 		if (path.includes("code-scanning/alerts")) return { stdout: JSON.stringify([code]) };
-		if (path.includes("secret-scanning/alerts")) return { stdout: JSON.stringify([secrets]) };
+		if (path.includes("secret-scanning/alerts")) {
+			assert.ok(args.includes("--paginate"));
+			assert.ok(!args.includes("--slurp"));
+			assert.equal(args[args.indexOf("--jq") + 1], ".[] | {number, state, secret_type, secret_type_display_name, html_url}");
+			return { stdout: secrets.map(({ number, state, secret_type, secret_type_display_name, html_url }) =>
+				JSON.stringify({ number, state, secret_type, secret_type_display_name, html_url })).join("\n") };
+		}
 		if (path.includes("dependabot/alerts")) return { stdout: JSON.stringify([dependabot]) };
 		if (args.includes("--jq")) {
 			assert.match(args[args.indexOf("--jq") + 1], /default_branch/);
@@ -181,7 +188,7 @@ test("starts empty and explains why when neither gh nor git can resolve the repo
 		const posture = await h.invoke("compliance-scoreboard", "get_state", {});
 		assert.equal(posture.source, "none");
 		assert.deepEqual(posture.controls.flatMap((c) => c.findings), []);
-		await assert.rejects(h.invoke("attack-surface-radar", "prepare_campaign", { ids: ["cs-js-campaign-0"], kind: "code" }), /Refresh live/);
+		await assert.rejects(h.invoke("attack-surface-radar", "prepare_campaign", { ids: ["cs-js-campaign-0"], kind: "code" }), /Could not determine/);
 		const opened = await h.opens[0].canvas.open({ instanceId: h.opens[0].instanceId });
 		assert.equal((await fetch(opened.url)).status, 200);
 	});
@@ -239,10 +246,10 @@ test("auto-syncs live alerts on first open and builds generic finding ids", { sk
 		const posture = await h.invoke("compliance-scoreboard", "get_state", {});
 		assert.equal(posture.source, "github");
 		assert.ok(posture.controls.find((c) => c.id === "vuln").findings.length > 0);
-		const cache = await h.waitFor(() => readFile(join(h.home, ARTIFACTS, "radar-cache.json"), "utf8").then(JSON.parse, () => null));
+		const cache = await h.waitFor(() => readFile(join(h.home, ARTIFACTS, "radar-cache-acme%2Fwidgets.json"), "utf8").then(JSON.parse, () => null));
 		assert.equal(cache.repo, "acme/widgets");
 		assert.doesNotMatch(JSON.stringify(cache), /NEVER-COPY-ME/);
-		assert.equal((await stat(join(h.home, ARTIFACTS, "radar-cache.json"))).mode & 0o777, 0o600);
+		assert.equal((await stat(join(h.home, ARTIFACTS, "radar-cache-acme%2Fwidgets.json"))).mode & 0o777, 0o600);
 	});
 });
 
@@ -292,13 +299,13 @@ test("existing permissive caches become owner-only on offline restore and live r
 			},
 			seed: async (dir) => {
 				await mkdir(dir, { recursive: true });
-				await writeFile(join(dir, "radar-cache.json"), JSON.stringify({
+				await writeFile(join(dir, "radar-cache-acme%2Fwidgets.json"), JSON.stringify({
 					repo: "acme/widgets", code: liveCode, dependabot: [], secrets: [], syncedAt: "yesterday",
 				}), { mode: 0o644 });
 			},
 		}, async (h) => {
 			await settled(h, (state) => offline ? state.refreshError : state.source === "github");
-			assert.equal((await stat(join(h.home, ARTIFACTS, "radar-cache.json"))).mode & 0o777, 0o600);
+			assert.equal((await stat(join(h.home, ARTIFACTS, "radar-cache-acme%2Fwidgets.json"))).mode & 0o777, 0o600);
 		});
 	}
 });
@@ -353,6 +360,188 @@ test("read-only Git questions stay in the panel and unsafe alert attachments are
 	});
 });
 
+test("canvas HTTP routes require instance capabilities, exact Host and Origin, and same-origin JSON actions", { skip }, async () => {
+	await withExtension({ gh: githubMock() }, async (h) => {
+		await synced(h);
+		const canvas = h.canvases.find((item) => item.id === "attack-surface-radar");
+		const opened = await canvas.open({ instanceId: "test-attack-surface-radar" });
+		const { origin, pathname } = new URL(opened.url);
+		assert.match(pathname, /^\/[0-9a-f]{64}\/$/);
+		for (const route of ["", "api/state", "events", "api/action"]) {
+			const method = route === "api/action" ? "POST" : "GET";
+			assert.equal((await fetch(`${origin}/${route}`, { method })).status, 403, "missing token");
+			assert.equal((await fetch(`${opened.url}${route}`, { method, headers: { Origin: "https://attacker.example" } })).status, 403, "foreign origin");
+			const status = await new Promise((resolve, reject) => {
+				const req = request(`${opened.url}${route}`, { method, headers: { Host: "attacker.example" } }, (res) => {
+					res.resume();
+					resolve(res.statusCode);
+				});
+				req.on("error", reject);
+				req.end();
+			});
+			assert.equal(status, 403, "DNS rebinding");
+		}
+		const actionUrl = `${opened.url}api/action`;
+		const body = JSON.stringify({ name: "request_copilot", input: { id: campaignId(0) } });
+		for (const headers of [
+			{ "Content-Type": "text/plain", Origin: origin },
+			{ "Content-Type": "application/json" },
+			{ "Content-Type": "application/json", Origin: "null" },
+		]) {
+			assert.equal((await fetch(actionUrl, { method: "POST", headers, body })).status, 403);
+		}
+		assert.equal(h.sent.length, 0);
+		for (const route of ["", "api/state"]) {
+			const response = await fetch(`${opened.url}${route}`);
+			assert.equal(response.status, 200);
+			assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+			if (!route) {
+				const html = await response.text();
+				assert.match(html, /fetch\("api\/action"/);
+				assert.match(html, /new EventSource\("events"\)/);
+			}
+		}
+		const stream = await fetch(`${opened.url}events`);
+		assert.equal(stream.status, 200);
+		const reader = stream.body.getReader();
+		assert.match(new TextDecoder().decode((await reader.read()).value), /^data: /);
+		await reader.cancel();
+		const headers = { "Content-Type": "application/json", Origin: origin };
+		assert.equal((await fetch(actionUrl, { method: "POST", headers, body: JSON.stringify({ name: "get_state" }) })).status, 200);
+		assert.equal((await fetch(actionUrl, { method: "POST", headers, body: JSON.stringify({ name: "request_copilot", repo: "wrong/repo", input: { id: campaignId(0) } }) })).status, 400);
+		const other = await canvas.open({ instanceId: "capability-other" });
+		h.opens.push({ canvas, instanceId: "capability-other" });
+		assert.equal((await fetch(`${new URL(other.url).origin}${pathname}api/state`)).status, 403, "capabilities are instance-specific");
+		assert.notEqual(new URL(other.url).pathname, pathname);
+		assert.equal(h.sent.length, 0);
+	});
+});
+
+test("explicit stale local-fix IDs never fall back to another alert", { skip }, async () => {
+	await withExtension({ gh: githubMock({ code: [codeAlert(1, "js/default-fix", "src/app.js", 2, "error")] }) }, async (h) => {
+		await synced(h);
+		for (const id of ["removed-rule", "", null, 12]) {
+			await assert.rejects(h.invoke("attack-surface-radar", "request_copilot", { id }), /no longer on the radar/);
+		}
+		assert.equal(h.sent.length, 0);
+		const launched = await h.invoke("attack-surface-radar", "request_copilot", {});
+		assert.equal(launched.status, "launching");
+		assert.equal(h.sent.length, 1);
+	});
+});
+
+test("briefs and local-fix ledgers tighten pre-existing permissive files", { skip }, async () => {
+	await withExtension({
+		gh: githubMock(),
+		seed: async (dir) => {
+			await mkdir(dir, { recursive: true });
+			await writeFile(join(dir, "audit-brief.md"), "old brief", { mode: 0o644 });
+			await writeFile(join(dir, "local-fixes-test-parent.json"), "{}", { mode: 0o644 });
+			await writeFile(join(dir, "local-fixes-test-parent.json.tmp"), "{}", { mode: 0o644 });
+		},
+	}, async (h) => {
+		await synced(h);
+		const dir = join(h.home, ARTIFACTS);
+		assert.equal((await stat(join(dir, "local-fixes-test-parent.json"))).mode & 0o777, 0o600);
+		const brief = await h.invoke("compliance-scoreboard", "generate_brief", {});
+		assert.equal((await stat(brief.path)).mode & 0o777, 0o600);
+		assert.match(await readFile(brief.path, "utf8"), /acme\/widgets/);
+		await h.invoke("attack-surface-radar", "request_copilot", { id: campaignId(0) });
+		assert.equal((await stat(join(dir, "local-fixes-test-parent.json"))).mode & 0o777, 0o600);
+	});
+});
+
+test("repository switches clear old alerts and evidence, preserve receipts and keep independent offline caches", { skip }, async () => {
+	let repo = "acme/widgets";
+	let offline = false;
+	let settingsReadable = true;
+	const gh = (command, args, options) => {
+		if (args[0] !== "repo" && offline) throw new Error("network down");
+		if (args.includes("--jq") && !args.includes("--paginate") && !settingsReadable) throw new Error("settings unreadable");
+		return githubMock({
+			repo,
+			handlers: async (request) => {
+				if (request.includes("--jq") && !request.includes("--paginate")) return { stdout: JSON.stringify({
+					default_branch: "main", secret_scanning_push_protection: { status: "enabled" },
+				}) };
+			},
+		})(command, args, options);
+	};
+	await withExtension({
+		gh,
+		seed: async (dir) => {
+			await mkdir(dir, { recursive: true });
+			await writeFile(join(dir, "campaigns-test-parent.json"), JSON.stringify({
+				draft: null, receipts: [{ id: "unconfirmed", repo: "acme/widgets", marker: "[canvas:unconfirmed]", status: "unknown" }],
+			}));
+		},
+	}, async (h) => {
+		await synced(h);
+		const a = await h.invoke("compliance-scoreboard", "get_state", {});
+		assert.equal(a.controls.find((control) => control.id === "secrets").evidence.find((item) => item.id === "push-protection").status, true);
+		await h.invoke("attack-surface-radar", "request_copilot", { id: campaignId(0) });
+		const ledgerPath = join(h.home, ARTIFACTS, "local-fixes-test-parent.json");
+		const ledger = await readFile(ledgerPath, "utf8");
+		repo = "acme/second";
+		offline = true;
+		await assert.rejects(h.invoke("attack-surface-radar", "request_copilot", { id: campaignId(0) }), /Repository changed/);
+		await h.invoke("attack-surface-radar", "refresh", {});
+		const bOffline = await h.invoke("attack-surface-radar", "get_state", {});
+		assert.equal(bOffline.repo, repo);
+		assert.equal(bOffline.source, "none");
+		assert.deepEqual(bOffline.findings, []);
+		assert.equal(bOffline.totals.codeScanning, 0);
+		assert.deepEqual(bOffline.assigned, {});
+		assert.deepEqual(bOffline.localFixes, {});
+		assert.equal(bOffline.campaigns.receipts[0].status, "unknown");
+		assert.equal(await readFile(ledgerPath, "utf8"), ledger, "unconfirmed launch records are preserved");
+		assert.equal(h.sent.length, 1, "stale action must not launch a session");
+		offline = false;
+		settingsReadable = false;
+		await h.invoke("attack-surface-radar", "refresh", {});
+		const b = await h.invoke("compliance-scoreboard", "get_state", {});
+		assert.equal(b.source, "github");
+		assert.equal(b.controls.find((control) => control.id === "secrets").evidence.find((item) => item.id === "push-protection").status, null);
+		const dir = join(h.home, ARTIFACTS);
+		const aCache = JSON.parse(await readFile(join(dir, "radar-cache-acme%2Fwidgets.json"), "utf8"));
+		const bCache = JSON.parse(await readFile(join(dir, "radar-cache-acme%2Fsecond.json"), "utf8"));
+		assert.equal(aCache.settings.secret_scanning_push_protection.status, "enabled");
+		assert.equal(bCache.settings, null);
+		await assert.rejects(h.invoke("attack-surface-radar", "request_copilot", { id: campaignId(0) }), /belongs to another repository/);
+		repo = "acme/widgets";
+		offline = true;
+		await h.invoke("attack-surface-radar", "refresh", {});
+		const restored = await h.invoke("attack-surface-radar", "get_state", {});
+		assert.equal(restored.source, "cache");
+		assert.ok(restored.findings.length > 0);
+		assert.equal(restored.localFixes[campaignId(0)].status, "launching");
+		repo = "acme/second";
+		await h.invoke("attack-surface-radar", "refresh", {});
+		assert.equal((await h.invoke("attack-surface-radar", "get_state", {})).source, "cache");
+	});
+});
+
+test("secret sync and campaign preparation parse only projected metadata over multiple pages", { skip }, async () => {
+	const secrets = [{ number: 11, state: "open", secret_type: "provider_key" }, { number: 12, state: "open", secret_type: "provider_key" }];
+	let projectedCalls = 0;
+	const gh = githubMock({ secrets, handlers: async (args) => {
+		if (!args.some((arg) => arg.includes("/secret-scanning/alerts"))) return;
+		assert.ok(args.includes("--paginate"));
+		assert.ok(!args.includes("--slurp"));
+		assert.equal(args[args.indexOf("--jq") + 1], ".[] | {number, state, secret_type, secret_type_display_name, html_url}");
+		projectedCalls++;
+		return { stdout: secrets.map((alert) => JSON.stringify(alert)).join("\n") + "\n" };
+	} });
+	await withExtension({ gh }, async (h) => {
+		const radar = await synced(h);
+		assert.equal(radar.totals.secretScanning, 2);
+		const finding = radar.findings.find((item) => item.source === "secret-scanning");
+		const draft = await h.invoke("attack-surface-radar", "prepare_campaign", { ids: [finding.id], kind: "secrets" });
+		assert.deepEqual(draft.numbers, [11, 12]);
+		assert.equal(projectedCalls, 2, "both alert sync and campaign selection use boundary projection");
+	});
+});
+
 test("alert types that are switched off count as empty, but an all-disabled repository is an error", { skip }, async () => {
 	const disabled = () => {
 		const error = new Error("HTTP 404: Code scanning is not enabled for this repository");
@@ -385,7 +574,7 @@ test("alert types that are switched off count as empty, but an all-disabled repo
 test("uses the cached sync only for the same repository and says when it is stale", { skip }, async () => {
 	const cacheFor = (repo) => async (dir) => {
 		await mkdir(dir, { recursive: true });
-		await writeFile(join(dir, "radar-cache.json"), JSON.stringify({
+		await writeFile(join(dir, `radar-cache-${encodeURIComponent(repo)}.json`), JSON.stringify({
 			repo, syncedAt: "2024-01-02 03:04",
 			code: [codeAlert(1, "js/sql-injection", "src/app.js", 7, "error")], dependabot: [], secrets: [],
 		}));
@@ -483,7 +672,7 @@ test("canvas HTTP actions share isolated launches, assignments and reviewed camp
 		const postureOpen = h.opens.find((o) => o.canvas.id === "compliance-scoreboard");
 		const opened = await postureOpen.canvas.open({ instanceId: postureOpen.instanceId });
 		const response = await fetch(`${opened.url}api/action`, {
-			method: "POST", headers: { "Content-Type": "application/json" },
+			method: "POST", headers: { "Content-Type": "application/json", Origin: new URL(opened.url).origin },
 			body: JSON.stringify({ name: "fix_locally", input: { id: selectedDependency.id, controlId: control.id } }),
 		});
 		assert.equal(response.status, 200);
@@ -550,7 +739,10 @@ test("canvas HTTP actions share isolated launches, assignments and reviewed camp
 			return { stdout: JSON.stringify([[alert]]) };
 		};
 		const assigning = invoke("compliance-scoreboard", "assign_copilot", { id: round.id, controlId: theme.id });
-		const pending = await invoke("compliance-scoreboard", "get_state", {});
+		const pending = await h.waitFor(async () => {
+			const state = await invoke("compliance-scoreboard", "get_state", {});
+			return state.pending ? state : null;
+		});
 		assert.equal(pending.pending.key, theme.id);
 		assert.equal(pending.pending.findingId, round.id);
 		await assert.rejects(invoke("attack-surface-radar", "reset_demo", {}), /assignment/);
@@ -648,7 +840,7 @@ test("canvas HTTP actions share isolated launches, assignments and reviewed camp
 		const lastCampaign = campaignId(7);
 		const campaignPost = async (name, input) => {
 			const reply = await fetch(`${opened.url}api/action`, {
-				method: "POST", headers: { "Content-Type": "application/json" },
+				method: "POST", headers: { "Content-Type": "application/json", Origin: new URL(opened.url).origin },
 				body: JSON.stringify({ name, input }),
 			});
 			return { status: reply.status, body: await reply.json() };
@@ -706,7 +898,7 @@ test("canvas HTTP actions share isolated launches, assignments and reviewed camp
 		assert.equal(direct.manager, "mona");
 		const directInput = { id: direct.id, revision: direct.revision, ids: [campaignId(0)], confirm: true,
 			name: "Direct campaign", description: "Fix the selected alert", dueDate: "2099-01-01" };
-		const createResponse = await fetch(`${radarOpen.url}api/action`, { method: "POST", headers: { "Content-Type": "application/json" },
+		const createResponse = await fetch(`${radarOpen.url}api/action`, { method: "POST", headers: { "Content-Type": "application/json", Origin: new URL(radarOpen.url).origin },
 			body: JSON.stringify({ name: "create_campaign", input: directInput }) });
 		assert.equal(createResponse.status, 200);
 		assert.equal((await createResponse.json()).status, "published");
@@ -715,7 +907,7 @@ test("canvas HTTP actions share isolated launches, assignments and reviewed camp
 		await assert.rejects(invoke("attack-surface-radar", "create_campaign", directInput), /confirm creation/);
 		assert.equal((await invoke("compliance-scoreboard", "get_state", {})).score, scoreBeforePublish);
 		await invoke("attack-surface-radar", "prepare_campaign", { ids: [campaignId(0)], kind: "code" });
-		const discardResponse = await fetch(`${radarOpen.url}api/action`, { method: "POST", headers: { "Content-Type": "application/json" },
+		const discardResponse = await fetch(`${radarOpen.url}api/action`, { method: "POST", headers: { "Content-Type": "application/json", Origin: new URL(radarOpen.url).origin },
 			body: JSON.stringify({ name: "discard_campaign", input: {} }) });
 		assert.equal(discardResponse.status, 200, "discard must return JSON success, not fail serializing an undefined result");
 		assert.deepEqual(await discardResponse.json(), { discarded: true });

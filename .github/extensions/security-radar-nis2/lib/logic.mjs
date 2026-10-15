@@ -98,8 +98,9 @@ export function buildLiveFindings({ code = [], dependabot = [], secrets = [], de
 			} : {}),
 			htmlUrl: alerts.length === 1 ? alerts[0].html_url ?? null : null,
 			copilot: (() => {
-				const hit = alerts.find((a) => (a.assignees ?? []).some((u) => isCopilotLogin(u.login)));
-				return hit ? { number: hit.number, url: hit.html_url } : null;
+				const representative = pickRadarAlert(alerts, { rule: ruleId, path: loc.path, line: loc.start_line });
+				return representative && (representative.assignees ?? []).some((u) => isCopilotLogin(u.login))
+					? { number: representative.number, url: representative.html_url } : null;
 			})(),
 			bySeverity: countSeverities(severities),
 			controlIds: !ruleId.startsWith("actions/") ? ["vuln"] : ruleId.includes("unpinned") ? ["change", "supply"] : ["change"],
@@ -779,6 +780,7 @@ function firstStep(finding) {
 export function complianceOfflineAnswer(kind, control) {
 	const top = control.findings[0];
 	const missing = control.evidence.filter((item) => item.status === false).map((item) => item.label);
+	const unknown = control.evidence.filter((item) => item.status !== true && item.status !== false).map((item) => item.label);
 	if (kind === "dependencies") return [
 		`- Week 1, application owner: review the selected groups (${control.findings.map((f) => f.title).join(", ")}) in Dependabot; verify available fixes and compatible versions.`,
 		"- Weeks 2–3, maintainers: review dependency update PRs in compatible batches and run API/frontend CI.",
@@ -792,12 +794,12 @@ export function complianceOfflineAnswer(kind, control) {
 	if (kind === "plan") {
 		return [
 			top ? `- Week 1: ${firstStep(top)}` : "- Week 1: confirm no open alerts remain on this theme.",
-			missing.length ? `- Week 2: add ${missing.join(" and ")}; evidence is the merged pull request.` : "- Week 2: keep the existing controls enabled and reviewed.",
+			missing.length ? `- Week 2: add ${missing.join(" and ")}; evidence is the merged pull request.` : unknown.length ? `- Week 2: verify ${unknown.join(" and ")}; their status is unknown.` : "- Week 2: keep the existing controls enabled and reviewed.",
 			"- Week 3–4: burn down the remaining alerts and export the security overview as evidence.",
 		].join("\n");
 	}
 	if (kind === "board") {
-		return `${control.title} scores ${control.score}/20 today with ${control.alerts} open alert${control.alerts === 1 ? "" : "s"}. Fixing the critical and high findings lifts it to ${control.projectedScore}/20. ${missing.length ? `The gap to close next: ${missing.join(", ")}.` : "The supporting controls are in place."}`;
+		return `${control.title} scores ${control.score}/20 today with ${control.alerts} open alert${control.alerts === 1 ? "" : "s"}. Fixing the critical and high findings lifts it to ${control.projectedScore}/20. ${missing.length ? `The gap to close next: ${missing.join(", ")}.` : ""}${unknown.length ? ` Unverified supporting controls (unknown status): ${unknown.join(", ")}.` : !missing.length ? "The supporting controls are in place." : ""}`;
 	}
 	if (kind === "auditor") {
 		return control.evidence

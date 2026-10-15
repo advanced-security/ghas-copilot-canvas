@@ -48,10 +48,11 @@ export function createLocalFixLauncher({ records, parentSessionId, send, persist
 		},
 		async launch(job) {
 			const previous = records[job.id];
+			if (previous && previous.repo !== job.repo) throw new Error("A fix request for this finding belongs to another repository. Preserve its receipt and review the existing session before launching another fix.");
 			if (previous && previous.status !== "failed") return previous;
 			const record = {
 				id: job.id, canvasId: job.canvasId, requestId: job.requestId,
-				title: job.title, status: "launching", at: Date.now(),
+				title: job.title, status: "launching", at: Date.now(), ...(job.repo ? { repo: job.repo } : {}),
 			};
 			records[job.id] = record;
 			try {

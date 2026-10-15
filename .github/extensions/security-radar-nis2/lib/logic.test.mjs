@@ -203,6 +203,31 @@ test("radar attachments resolve canonical paths and reject traversal and symlink
 	assert.equal(radarAttachment({ path: "secret metadata" }, root), null);
 });
 
+test("Copilot assignment metadata belongs only to the representative alert", () => {
+	const first = cs(1, "js/sql-injection", "high", "src/first.js", 10);
+	const second = { ...cs(2, "js/sql-injection", "high", "src/second.js", 20), assignees: [{ login: COPILOT_ASSIGNEE }] };
+	assert.equal(buildLiveFindings({ code: [second, first] })[0].copilot, null);
+	const assignedFirst = { ...first, assignees: [{ login: COPILOT_ASSIGNEE }] };
+	assert.deepEqual(buildLiveFindings({ code: [second, assignedFirst] })[0].copilot, { number: 1, url: first.html_url });
+});
+
+test("offline governance answers distinguish unknown evidence from verified controls", () => {
+	const control = complianceModel().controls.find((item) => item.id === "secrets");
+	for (const evidence of [
+		control.evidence.map((item) => ({ ...item, status: null })),
+		control.evidence.map((item, i) => ({ ...item, status: i === 0 ? true : null })),
+		control.evidence.map((item, i) => ({ ...item, status: i === 0 ? false : null })),
+	]) {
+		const board = complianceOfflineAnswer("board", { ...control, evidence });
+		assert.match(board, /Unverified supporting controls \(unknown status\)/);
+		assert.doesNotMatch(board, /supporting controls are in place/);
+		assert.match(complianceOfflineAnswer("auditor", { ...control, evidence }), /not checked/);
+	}
+	const verified = { ...control, evidence: control.evidence.map((item) => ({ ...item, status: true })) };
+	assert.match(complianceOfflineAnswer("board", verified), /supporting controls are in place/);
+	assert.match(complianceOfflineAnswer("plan", control), /verify .*status is unknown/);
+});
+
 test("an empty sync produces empty, finite models", () => {
 	assert.deepEqual(buildLiveFindings(), []);
 	assert.deepEqual(layoutFindings(), []);

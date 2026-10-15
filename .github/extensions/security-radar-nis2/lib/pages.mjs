@@ -789,10 +789,10 @@ function draw() {
         field.value = "";
       }
       try {
-        const res = await fetch("/api/action", {
+        const res = await fetch("api/action", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: el.dataset.act === "clear_campaign_selection" ? "discard_campaign" : el.dataset.act, input }),
+          body: JSON.stringify({ name: el.dataset.act === "clear_campaign_selection" ? "discard_campaign" : el.dataset.act, input, ...(state.repo ? { repo: state.repo } : {}) }),
         });
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -828,7 +828,7 @@ function draw() {
 
 const CLIENT_TAIL = `
 draw();
-const events = new EventSource("/events");
+const events = new EventSource("events");
 events.onmessage = (event) => {
   const next = JSON.parse(event.data);
   if (next.resetEpoch !== state.resetEpoch) {

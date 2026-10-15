@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -86,6 +86,19 @@ function containmentPath(repo) {
 	return join(artifactDir(), `state-${encodeURIComponent(repo.toLowerCase())}.json`);
 }
 
+function cachePath(repo) {
+	return join(artifactDir(), `radar-cache-${encodeURIComponent(repo.toLowerCase())}.json`);
+}
+
+async function privateWrite(path, content) {
+	try {
+		await chmod(path, 0o600);
+	} catch (error) {
+		if (error.code !== "ENOENT") throw error;
+	}
+	await writeFile(path, content, { mode: 0o600 });
+}
+
 async function loadState(repo) {
 	if (containmentRepo === repo.toLowerCase()) return;
 	world.contained.clear();
@@ -102,8 +115,8 @@ async function loadState(repo) {
 // The cache is keyed by repository: alerts synced from another checkout must not show up here.
 async function loadCache(repo) {
 	try {
-		await chmod(join(artifactDir(), "radar-cache.json"), 0o600);
-		const cache = JSON.parse(await readFile(join(artifactDir(), "radar-cache.json"), "utf8"));
+		await chmod(cachePath(repo), 0o600);
+		const cache = JSON.parse(await readFile(cachePath(repo), "utf8"));
 		if (cache && cache.repo === repo && Array.isArray(cache.code) && Array.isArray(cache.dependabot) && Array.isArray(cache.secrets)) {
 			world.radarFindings = buildLiveFindings(cache);
 			world.totals = radarTotals(cache, cache.syncedAt);
@@ -197,6 +210,9 @@ async function resetAll() {
 }
 
 function stateFor(canvasId) {
+	const localFixes = Object.fromEntries(Object.entries(world.localFixes).filter(([, record]) => record.repo === world.repo));
+	const campaigns = campaignService?.state();
+	const campaignView = campaigns ? { ...campaigns, draft: campaigns.draft?.repo === world.repo ? campaigns.draft : null } : undefined;
 	const viewState = {
 		resetBlocked: resetBlocked(),
 		resetting: world.resetting,
@@ -218,8 +234,8 @@ function stateFor(canvasId) {
 			threads: world.radar.threads,
 			pending: world.radar.pending,
 			assigned: world.radar.assigned,
-			localFixes: world.localFixes,
-			campaigns: campaignService?.state(),
+			localFixes,
+			campaigns: campaignView,
 			totals: world.totals,
 			source: world.source,
 			layoutSeed: world.layoutSeed,
@@ -241,8 +257,8 @@ function stateFor(canvasId) {
 		pending: world.compliance.pending,
 		assigned: world.radar.assigned,
 		labels: COMPLIANCE_ASK_LABEL,
-		localFixes: world.localFixes,
-		campaigns: campaignService?.state(),
+		localFixes,
+		campaigns: campaignView,
 		campaignThemes: Object.fromEntries(complianceNow().controls.map((control) => [control.id,
 			world.radarFindings.filter((finding) => finding.controlIds?.includes(control.id)).map((finding) => ({
 				...finding, url: radarFindingUrl(finding, world.repo),
@@ -288,6 +304,13 @@ function readBody(req) {
 
 async function handleAction(canvasId, name, input = {}) {
 	const id = typeof input.id === "string" ? input.id : undefined;
+	if (["request_copilot", "fix_locally", "assign_copilot", "ask_copilot", "explain_finding", "assess_priority",
+		"suggest_fix", "prepare_campaign", "create_campaign", "publish_campaign", "draft_dependency_plan"].includes(name)) {
+		if (world.refreshing) throw new CanvasError("busy", "Wait for the GitHub refresh to finish.");
+		const previousRepo = world.repo;
+		const repo = await resolveRepo();
+		if (previousRepo !== repo) throw new CanvasError("repository_changed", "Repository changed. Refresh and select the finding again.");
+	}
 	if (name === "reset_demo") return resetAll();
 	if (world.resetting && name !== "get_state") throw new CanvasError("busy", "The reset is still in progress.");
 	if (["prepare_campaign", "create_campaign", "review_campaign", "edit_campaign", "publish_campaign", "refresh_campaigns", "acknowledge_campaign_absent", "discard_campaign"].includes(name)) {
@@ -372,7 +395,8 @@ async function handleAction(canvasId, name, input = {}) {
 			return { contained: [] };
 		}
 		if (name === "request_copilot") {
-			const finding = radarFinding(id) ?? world.radarFindings.find((item) => !world.contained.has(item.id));
+			if (input.id !== undefined && !radarFinding(id)) throw new CanvasError("unknown_finding", "That blip is no longer on the radar. Select it again.");
+			const finding = input.id === undefined ? world.radarFindings.find((item) => !world.contained.has(item.id)) : radarFinding(id);
 			if (!finding) throw new CanvasError("nothing_to_send", "Every mapped finding is already contained.");
 			if (finding.source === "secret-scanning") throw new CanvasError("not_code", "Secret rotation requires human action; no secret values are loaded.");
 			return launchLocalFix(canvasId, finding, radarPrompt("change", finding, "Apply the proposed remediation locally.", { repo: world.repo }));
@@ -418,7 +442,7 @@ async function handleAction(canvasId, name, input = {}) {
 			await mkdir(dir, { recursive: true });
 			const path = join(dir, "audit-brief.md");
 			const model = complianceNow();
-			await writeFile(path, auditBrief(model));
+			await privateWrite(path, auditBrief(model));
 			// Freeze what the brief says, so the cards match the saved file even after a refresh.
 			const { score, projected, controls, totals } = model;
 			world.brief = { open: true, at: stamp(), path, model: { score, projected, controls, totals, source: world.source } };
@@ -566,7 +590,7 @@ async function launchLocalFix(canvasId, finding, prompt) {
 	if (!instanceId) throw new CanvasError("canvas_closed", "Open the canvas before launching a fix.");
 	try {
 		return await localFixLauncher.launch({
-			canvasId, instanceId, id: finding.id, title: finding.title, prompt, requestId: randomUUID(),
+			canvasId, instanceId, id: finding.id, title: finding.title, prompt, requestId: randomUUID(), repo: world.repo,
 		});
 	} catch (error) {
 		session.log(`local fix launch failed: ${error.message}`, { level: "error" });
@@ -785,7 +809,9 @@ async function assignToCopilot(finding, store, canvasId, threadKey = finding.id)
 	broadcast("*");
 	let url = null;
 	try {
+		const expectedRepo = world.repo;
 		const repo = await resolveRepo();
+		if (repo !== expectedRepo || !world.radarFindings.includes(finding)) throw new Error("Repository changed. Refresh and select the finding again.");
 		const alerts = await ghPages(`repos/${repo}/code-scanning/alerts?state=open&per_page=100`);
 		const alert = pickRadarAlert(alerts, finding);
 		if (!alert) throw new Error("No open code scanning alert matches this blip any more.");
@@ -910,7 +936,7 @@ async function refreshFromGitHub() {
 				JSON.stringify({ repo, syncedAt, ...raw, settings: settings ?? world.settings }),
 				{ mode: 0o600 },
 			);
-			await rename(temp, join(dir, "radar-cache.json"));
+			await rename(temp, cachePath(repo));
 		} catch (error) {
 			session.log(`Could not save radar cache: ${error.message}`, { level: "warning" });
 		}
@@ -967,15 +993,33 @@ async function resolveRepo() {
 	} catch {
 		// Fall through to the error below.
 	}
-	world.repo = null;
+	await remember(null);
 	const hint = ghError && /gh auth login|not logged in/i.test(String(ghError.stderr || ghError.message)) ? " gh is not authenticated; run `gh auth login`." : "";
 	throw new Error(`Could not determine the GitHub repository for this session. Open the session in a git checkout with a GitHub origin remote.${hint}`);
 }
 
 async function remember(repo) {
+	if (world.repo?.toLowerCase() !== repo?.toLowerCase()) {
+		world.contained.clear();
+		containmentRepo = null;
+		world.radarFindings = [];
+		world.totals = { ...EMPTY_TOTALS };
+		world.settings = null;
+		world.settingsSource = null;
+		world.source = "none";
+		world.refreshError = null;
+		world.radar.assigned = {};
+		world.radar.threads = {};
+		world.compliance.threads = {};
+		world.preview = false;
+		world.brief = { open: false, at: null, path: null };
+		world.copilotStatus = null;
+		world.resetEpoch++;
+	}
 	world.repo = repo;
 	world.repoError = null;
-	await loadState(repo);
+	if (repo) await loadState(repo);
+	broadcast("*");
 	return repo;
 }
 
@@ -994,13 +1038,17 @@ async function repoSettings(repo) {
 	}
 }
 
-// --slurp wraps every page in one outer array; without it, page two breaks JSON.parse.
+// gh cannot combine --slurp and --jq: projected secret metadata uses one JSON object per line.
 function ghPages(path, headers = []) {
-	return execFileAsync("gh", ["api", "--paginate", "--slurp", path, ...headers], {
+	const secrets = /\/secret-scanning\/alerts(?:\?|\/|$)/.test(path);
+	const output = secrets
+		? ["--jq", ".[] | {number, state, secret_type, secret_type_display_name, html_url}"] : ["--slurp"];
+	return execFileAsync("gh", ["api", "--paginate", ...output, path, ...headers], {
 		cwd: session.workspacePath,
 		timeout: 12000,
 		maxBuffer: 16 * 1024 * 1024,
 	}).then(({ stdout }) => {
+		if (secrets) return stdout.trim() ? stdout.trim().split("\n").map((line) => JSON.parse(line)) : [];
 		const pages = JSON.parse(stdout || "[]");
 		if (!Array.isArray(pages)) throw new Error(`unexpected response for ${path}`);
 		return pages.flat();
@@ -1008,7 +1056,9 @@ function ghPages(path, headers = []) {
 }
 
 async function campaignContext() {
+	const expectedRepo = world.repo;
 	const repo = await resolveRepo();
+	if (repo !== expectedRepo) throw new Error("Repository changed. Refresh and prepare the campaign again.");
 	const metadata = await campaignApi("GET", `repos/${repo}`);
 	if (!Number.isSafeInteger(metadata.id) || typeof metadata.default_branch !== "string") throw new Error("Invalid repository metadata from GitHub.");
 	const user = await campaignApi("GET", "user");
@@ -1036,9 +1086,24 @@ async function campaignApi(method, path, body) {
 }
 
 function startServer(canvasId) {
+	const token = randomBytes(32).toString("hex");
+	const prefix = `/${token}/`;
 	const server = createServer(async (req, res) => {
 		try {
-			const url = new URL(req.url ?? "/", "http://127.0.0.1");
+			const origin = `http://127.0.0.1:${server.address().port}`;
+			res.setHeader("Referrer-Policy", "no-referrer");
+			res.setHeader("X-Content-Type-Options", "nosniff");
+			res.setHeader("Cache-Control", "no-store");
+			if (req.headers.host !== new URL(origin).host || (req.headers.origin && req.headers.origin !== origin)) {
+				json(res, 403, { error: "Invalid canvas host or origin." });
+				return;
+			}
+			const url = new URL(req.url ?? "/", origin);
+			if (!url.pathname.startsWith(prefix)) {
+				json(res, 403, { error: "Canvas capability required." });
+				return;
+			}
+			url.pathname = `/${url.pathname.slice(prefix.length)}`;
 			if (req.method === "GET" && url.pathname === "/") {
 				const html = renderPage(canvasId, stateFor(canvasId));
 				res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
@@ -1063,7 +1128,12 @@ function startServer(canvasId) {
 				return;
 			}
 			if (req.method === "POST" && url.pathname === "/api/action") {
+				if (req.headers.origin !== origin || req.headers["content-type"]?.split(";")[0].trim().toLowerCase() !== "application/json") {
+					json(res, 403, { error: "Canvas actions require same-origin JSON." });
+					return;
+				}
 				const body = await readBody(req);
+				if (body.repo !== undefined && body.repo !== world.repo) throw new CanvasError("repository_changed", "Repository changed. Refresh and select the finding again.");
 				const result = await handleAction(canvasId, String(body.name ?? ""), body.input ?? {});
 				json(res, 200, result);
 				return;
@@ -1081,7 +1151,7 @@ function startServer(canvasId) {
 				reject(new Error("loopback server did not bind"));
 				return;
 			}
-			resolve({ server, url: `http://127.0.0.1:${address.port}/`, canvasId });
+			resolve({ server, url: `http://127.0.0.1:${address.port}${prefix}`, canvasId });
 		});
 	});
 }
@@ -1269,6 +1339,7 @@ const session = await joinSession({
 
 const localFixPath = join(artifactDir(), `local-fixes-${session.sessionId}.json`);
 try {
+	await chmod(localFixPath, 0o600);
 	const restored = JSON.parse(await readFile(localFixPath, "utf8"));
 	if (!restored || typeof restored !== "object" || Array.isArray(restored)) throw new Error("Invalid saved local fix state.");
 	for (const record of Object.values(restored)) {
@@ -1288,7 +1359,7 @@ const localFixLauncher = createLocalFixLauncher({
 	send: (message) => session.send(message),
 	persist: async () => {
 		await mkdir(artifactDir(), { recursive: true });
-		await writeFile(`${localFixPath}.tmp`, JSON.stringify(world.localFixes, null, 2));
+		await privateWrite(`${localFixPath}.tmp`, JSON.stringify(world.localFixes, null, 2));
 		await rename(`${localFixPath}.tmp`, localFixPath);
 	},
 	broadcast: () => broadcast("*"),
