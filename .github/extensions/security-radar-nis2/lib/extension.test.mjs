@@ -134,8 +134,9 @@ function githubMock({ code = [...liveCode, workflowAlert], dependabot = liveDepe
 		assert.equal(command, "gh");
 		if (args[0] === "repo") {
 			assert.equal(options.cwd, process.cwd(), "repository resolution must use the checkout, not the session artifact directory");
-			return { stdout: `${repo}\n` };
+			return { stdout: JSON.stringify({ nameWithOwner: repo, url: `https://github.com/${repo}` }) };
 		}
+		assert.equal(args[args.indexOf("--hostname") + 1], "github.com", "all API calls must target the verified host");
 		const custom = await handlers?.(args);
 		if (custom) return custom;
 		if (args.includes("user")) return { stdout: JSON.stringify({ login: "mona" }) };
@@ -196,7 +197,7 @@ test("starts empty and explains why when neither gh nor git can resolve the repo
 
 test("reports an unauthenticated gh as an empty state with guidance", { skip }, async () => {
 	const gh = async (command, args) => {
-		if (args[0] === "repo") return { stdout: "acme/widgets\n" };
+		if (args[0] === "repo") return { stdout: JSON.stringify({ nameWithOwner: "acme/widgets", url: "https://github.com/acme/widgets" }) };
 		const error = new Error("gh: To get started with GitHub CLI, please run: gh auth login");
 		error.stderr = error.message;
 		throw error;
@@ -253,6 +254,131 @@ test("auto-syncs live alerts on first open and builds generic finding ids", { sk
 	});
 });
 
+test("non-GitHub origins and gh repository hosts cannot trigger API calls on a namesake repository", { skip }, async () => {
+	for (const host of ["gitlab.com", "github.example.com", "github.com.evil.test"]) {
+		for (const ghResolves of [true, false]) {
+			let apiCalls = 0;
+			await withExtension({ gh: async (command, args) => {
+				if (command === "git") return { stdout: `https://${host}/acme/widgets.git` };
+				if (args[0] === "repo") {
+					if (!ghResolves) throw new Error("Repository unavailable");
+					return { stdout: JSON.stringify({ nameWithOwner: "acme/widgets", url: `https://${host}/acme/widgets` }) };
+				}
+				apiCalls++;
+				throw new Error("Must not call an API for an unverified host");
+			} }, async (h) => {
+				const state = await settled(h, (current) => current.refreshError);
+				assert.equal(state.repo, null);
+				assert.deepEqual(state.findings, []);
+				assert.match(state.repoError, /github\.com origin/);
+				await assert.rejects(h.invoke("attack-surface-radar", "assign_copilot", { id: campaignId(0) }), /Could not determine/);
+				assert.equal(apiCalls, 0);
+			});
+		}
+	}
+});
+
+test("assignments serialize both canvases and refresh from repository admission through PATCH completion", { skip }, async () => {
+	for (const canvas of ["attack-surface-radar", "compliance-scoreboard"]) {
+		for (const stage of ["resolution", "patch"]) {
+			await withExtension({ gh: githubMock() }, async (h) => {
+				await synced(h);
+				const other = canvas === "attack-surface-radar" ? "compliance-scoreboard" : "attack-surface-radar";
+				const input = { id: campaignId(0), ...(canvas === "compliance-scoreboard" ? { controlId: "vuln" } : {}) };
+				const { promise, resolve } = Promise.withResolvers();
+				let entered = false;
+				let assigned = false;
+				let patches = 0;
+				const live = githubMock({ handlers: async (args) => {
+					if (args.includes("PATCH")) {
+						patches++;
+						if (stage === "patch") { entered = true; await promise; }
+						assigned = true;
+						return { stdout: JSON.stringify({ assignees: [{ login: "copilot" }] }) };
+					}
+					if (assigned && args.some((arg) => arg.includes("code-scanning/alerts"))) {
+						return { stdout: JSON.stringify([liveCode.map((alert) =>
+							({ ...alert, assignees: [{ login: "copilot" }] }))]) };
+					}
+				} });
+				h.gh = async (command, args, options) => {
+					if (stage === "resolution" && args[0] === "repo") { entered = true; await promise; }
+					return live(command, args, options);
+				};
+				const pending = h.invoke(canvas, "assign_copilot", input);
+				try {
+					await h.waitFor(() => entered);
+					await assert.rejects(h.invoke(other, "assign_copilot", { id: input.id, controlId: "vuln" }), /current GitHub operation/);
+					for (const target of [canvas, other]) {
+						await assert.rejects(h.invoke(target, "refresh", {}), /current GitHub operation/);
+					}
+					await assert.rejects(h.invoke(other, "reset_demo", {}), /finish/);
+					if (stage === "patch") await assert.rejects(h.invoke(other, "ask_copilot", {
+						id: other === "attack-surface-radar" ? input.id : "vuln", question: "Explain the risk",
+					}), /previous question/);
+				} finally {
+					resolve();
+					await pending;
+				}
+				assert.equal(patches, 1);
+				for (const target of [canvas, other]) {
+					assert.equal((await h.invoke(target, "get_state", {})).assigned[input.id].number, 100);
+				}
+				await h.invoke(other, "refresh", {});
+				const refreshed = await h.invoke("attack-surface-radar", "get_state", {});
+				assert.equal(refreshed.findings.find((finding) => finding.id === input.id).copilot.number, 100);
+			});
+		}
+	}
+});
+
+test("refresh admission blocks assignments before asynchronous repository resolution finishes", { skip }, async () => {
+	await withExtension({ gh: githubMock() }, async (h) => {
+		await synced(h);
+		const live = githubMock();
+		const { promise, resolve } = Promise.withResolvers();
+		let entered = false;
+		h.gh = async (command, args, options) => {
+			if (args[0] === "repo") { entered = true; await promise; }
+			return live(command, args, options);
+		};
+		const refresh = h.invoke("attack-surface-radar", "refresh", {});
+		try {
+			await h.waitFor(() => entered);
+			for (const canvas of ["attack-surface-radar", "compliance-scoreboard"]) {
+				await assert.rejects(h.invoke(canvas, "assign_copilot", { id: campaignId(0), controlId: "vuln" }), /current GitHub operation/);
+			}
+		} finally {
+			resolve();
+			await refresh;
+		}
+		h.gh = async (command, args, options) => {
+			if (args.includes("PATCH")) throw new Error("GitHub HTTP 403");
+			return live(command, args, options);
+		};
+		const result = await h.invoke("attack-surface-radar", "assign_copilot", { id: campaignId(0) });
+		assert.equal(result.assigned, null);
+		await h.invoke("compliance-scoreboard", "refresh", {});
+		assert.equal((await h.invoke("attack-surface-radar", "get_state", {})).resetBlocked, false);
+	});
+});
+
+test("a corrupt or unreadable fix-session ledger fails initialization before any launch or refresh", { skip }, async () => {
+	for (const saved of ["{broken", "[]", '{"saved":{"requestId":"old"}}', null]) {
+		let calls = 0;
+		await assert.rejects(withExtension({
+			gh: async () => { calls++; throw new Error("No API calls expected"); },
+			seed: async (dir) => {
+				await mkdir(dir, { recursive: true });
+				const path = join(dir, "local-fixes-test-parent.json");
+				if (saved === null) await mkdir(path);
+				else await writeFile(path, saved);
+			},
+		}, () => assert.fail("extension must not initialize with a lost deduplication ledger")), /Cannot safely restore dedicated fix sessions/);
+		assert.equal(calls, 0);
+	}
+});
+
 test("containment annotations are repository-scoped and cannot change live posture or campaign scope", { skip }, async () => {
 	const id = campaignId(0);
 	const seed = async (dir) => {
@@ -272,6 +398,14 @@ test("containment annotations are repository-scoped and cannot change live postu
 		assert.deepEqual(annotated.campaignThemes, baseline.campaignThemes);
 		assert.equal(annotated.score, baseline.score);
 		assert.equal(annotated.projected, baseline.projected);
+		const dependency = radar.findings.find((finding) => finding.source === "dependabot");
+		await h.invoke("attack-surface-radar", "contain_finding", { id: dependency.id });
+		await h.invoke("compliance-scoreboard", "draft_dependency_plan", { controlId: "supply", ids: [dependency.id] });
+		await h.waitFor(async () => !(await h.invoke("compliance-scoreboard", "get_state", {})).pending);
+		assert.match(h.sent.at(-1).prompt, /lodash/);
+		assert.equal((await h.invoke("compliance-scoreboard", "get_state", {})).score, baseline.score);
+		await h.invoke("attack-surface-radar", "reset_contains", {});
+		await h.invoke("attack-surface-radar", "contain_finding", { id });
 		saved = await readFile(join(h.home, ARTIFACTS, "state-acme%2Fwidgets.json"), "utf8");
 		assert.deepEqual(JSON.parse(saved), { repo: "acme/widgets", contained: [id] });
 	});
@@ -345,7 +479,8 @@ test("panel asks are serialized across both canvases and release the shared guar
 test("read-only Git questions stay in the panel and unsafe alert attachments are rejected before sending", { skip }, async () => {
 	await withExtension({ gh: githubMock() }, async (h) => {
 		await synced(h);
-		for (const question of ["Which branch contains this alert?", "What commit introduced it?", "Please review this PR"]) {
+		for (const question of ["Which branch contains this alert?", "What commit introduced it?", "Please review this PR",
+			"Please don't fix this; just explain the risk", "Ne corrige pas ça", "Please discuss whether to fix this"]) {
 			await h.invoke("attack-surface-radar", "ask_copilot", { id: campaignId(0), question });
 			await settled(h, (state) => !state.pending);
 			assert.doesNotMatch(h.sent.at(-1).prompt, /Use create_session/);
@@ -580,7 +715,7 @@ test("uses the cached sync only for the same repository and says when it is stal
 		}));
 	};
 	const offline = async (command, args) => {
-		if (args[0] === "repo") return { stdout: "acme/widgets\n" };
+		if (args[0] === "repo") return { stdout: JSON.stringify({ nameWithOwner: "acme/widgets", url: "https://github.com/acme/widgets" }) };
 		throw new Error("network down");
 	};
 	await withExtension({ gh: offline, seed: cacheFor("acme/widgets") }, async (h) => {
@@ -724,7 +859,7 @@ test("canvas HTTP actions share isolated launches, assignments and reviewed camp
 		const patchGate = new Promise((resolve) => { releasePatch = resolve; });
 		h.gh = async (command, args) => {
 			assert.equal(command, "gh");
-			if (args[0] === "repo") return { stdout: "acme/widgets\n" };
+			if (args[0] === "repo") return { stdout: JSON.stringify({ nameWithOwner: "acme/widgets", url: "https://github.com/acme/widgets" }) };
 			requests.push(args);
 			if (args.includes("PATCH")) {
 				await patchGate;
@@ -768,7 +903,7 @@ test("canvas HTTP actions share isolated launches, assignments and reviewed camp
 		await assert.rejects(invoke("compliance-scoreboard", "assign_copilot", { id: selectedDependency.id, controlId: control.id }), /Only code scanning/);
 		assert.equal(requests.length, requestCount, "ineligible actions must not call GitHub");
 		h.gh = async (command, args) => {
-			if (args[0] === "repo") return { stdout: "acme/widgets\n" };
+			if (args[0] === "repo") return { stdout: JSON.stringify({ nameWithOwner: "acme/widgets", url: "https://github.com/acme/widgets" }) };
 			throw new Error("GitHub HTTP 403");
 		};
 		const errorTheme = after.controls.find((c) => c.findings.some((f) => f.id === other.id));

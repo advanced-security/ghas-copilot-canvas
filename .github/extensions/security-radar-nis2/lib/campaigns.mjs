@@ -275,7 +275,7 @@ export function createCampaignService({ data, context, api, list, persist, broad
 		},
 		async acknowledgeAbsent(input) {
 			return locked(async () => {
-				const receipt = data.receipts.find((item) => item.id === input.id);
+				const receipt = data.receipts.find((item) => item.id === input.id && item.status === "unknown");
 				if (input.confirm !== true || receipt?.status !== "unknown" || receipt.id === "restore-error") {
 					throw new Error("Explicitly confirm that you inspected GitHub and no campaign was created.");
 				}

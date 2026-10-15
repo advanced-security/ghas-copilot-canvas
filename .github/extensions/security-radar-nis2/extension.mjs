@@ -72,6 +72,7 @@ let campaignService;
 let stopCampaignProgress;
 let activeAsk = null;
 let containmentRepo = null;
+let githubOperation = null;
 
 function newSeed() {
 	return 1 + Math.floor(Math.random() * 1e9);
@@ -175,7 +176,7 @@ function complianceNow() {
 }
 
 function resetBlocked() {
-	return Boolean(world.resetting || world.refreshing || campaignService?.busy || world.radar.pending || world.compliance.pending ||
+	return Boolean(githubOperation || world.resetting || world.refreshing || campaignService?.busy || world.radar.pending || world.compliance.pending ||
 		Object.values(world.localFixes).some((record) => record.status === "launching"));
 }
 
@@ -303,6 +304,20 @@ function readBody(req) {
 }
 
 async function handleAction(canvasId, name, input = {}) {
+	if (name !== "assign_copilot") return handleActionUnlocked(canvasId, name, input);
+	if (githubOperation || world.radar.pending || world.compliance.pending) {
+		throw new CanvasError("busy", "Wait for the current GitHub operation or previous question in either canvas.");
+	}
+	githubOperation = "assignment";
+	try {
+		return await handleActionUnlocked(canvasId, name, input);
+	} finally {
+		githubOperation = null;
+		broadcast("*");
+	}
+}
+
+async function handleActionUnlocked(canvasId, name, input = {}) {
 	const id = typeof input.id === "string" ? input.id : undefined;
 	if (["request_copilot", "fix_locally", "assign_copilot", "ask_copilot", "explain_finding", "assess_priority",
 		"suggest_fix", "prepare_campaign", "create_campaign", "publish_campaign", "draft_dependency_plan"].includes(name)) {
@@ -489,7 +504,7 @@ async function handleAction(canvasId, name, input = {}) {
 			} catch (error) {
 				throw new CanvasError("invalid_selection", error.message);
 			}
-			if (selected.some((finding) => finding.source !== "dependabot" || world.contained.has(finding.id))) {
+			if (selected.some((finding) => finding.source !== "dependabot")) {
 				throw new CanvasError("invalid_selection", "Select only open dependency groups mapped to this theme.");
 			}
 			const control = complianceNow().controls.find((item) => item.id === input.controlId);
@@ -643,7 +658,7 @@ function askCompliance(kind, control, question) {
 
 function askInPanel(job) {
 	const { canvasId, store, key } = job;
-	if (activeAsk || store.pending) throw new CanvasError("busy", "Copilot is still answering the previous question. Wait before asking in either security canvas.");
+	if (activeAsk || githubOperation === "assignment" || store.pending) throw new CanvasError("busy", "Copilot is still answering the previous question. Wait before asking in either security canvas.");
 	activeAsk = job;
 	const thread = (store.threads[key] ??= []);
 	const entry = {
@@ -790,7 +805,7 @@ function radarFinding(id) {
 // The thread lives in the calling canvas; both views share the assignment.
 async function assignToCopilot(finding, store, canvasId, threadKey = finding.id) {
 	const assigned = world.radar.assigned;
-	if (store.pending) throw new CanvasError("busy", "Copilot is still answering the previous question.");
+	if (world.radar.pending || world.compliance.pending) throw new CanvasError("busy", "Copilot is still answering the previous question.");
 	const thread = (store.threads[threadKey] ??= []);
 	const entry = {
 		id: `ask-${++askSeq}`,
@@ -829,7 +844,7 @@ async function assignToCopilot(finding, store, canvasId, threadKey = finding.id)
 			entry.note = `Assigning alert #${alert.number} to Copilot…`;
 			broadcast(canvasId);
 			const patch = async () => {
-				const args = ["api", "-X", "PATCH", request.path, "-H", "Accept: application/vnd.github+json"];
+				const args = ["api", "--hostname", "github.com", "-X", "PATCH", request.path, "-H", "Accept: application/vnd.github+json"];
 				for (const login of request.body.assignees) args.push("-f", `assignees[]=${login}`);
 				const { stdout } = await execFileAsync("gh", args, { cwd: session.workspacePath, timeout: 15000 });
 				return JSON.parse(stdout || "{}");
@@ -872,6 +887,17 @@ function stamp(date = new Date()) {
 }
 
 async function runRefresh() {
+	if (githubOperation) throw new CanvasError("busy", "Wait for the current GitHub operation to finish.");
+	githubOperation = "refresh";
+	try {
+		return await runRefreshUnlocked();
+	} finally {
+		githubOperation = null;
+		broadcast("*");
+	}
+}
+
+async function runRefreshUnlocked() {
 	if (campaignService?.busy) throw new CanvasError("busy", "Wait for the campaign operation to finish.");
 	world.refreshing = true;
 	world.refreshError = null;
@@ -980,9 +1006,10 @@ async function resolveRepo() {
 	const cwd = repoRoot();
 	let ghError;
 	try {
-		const { stdout } = await execFileAsync("gh", ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], { cwd, timeout: 8000 });
-		const repo = stdout.trim();
-		if (REPO_PATTERN.test(repo)) return remember(repo);
+		const { stdout } = await execFileAsync("gh", ["repo", "view", "--json", "nameWithOwner,url"], { cwd, timeout: 8000 });
+		const { nameWithOwner: repo, url } = JSON.parse(stdout);
+		if (typeof repo === "string" && REPO_PATTERN.test(repo) && parseRemoteRepo(url) === repo) return remember(repo);
+		throw new Error("Only repositories hosted on github.com are supported.");
 	} catch (error) {
 		ghError = error;
 	}
@@ -995,7 +1022,7 @@ async function resolveRepo() {
 	}
 	await remember(null);
 	const hint = ghError && /gh auth login|not logged in/i.test(String(ghError.stderr || ghError.message)) ? " gh is not authenticated; run `gh auth login`." : "";
-	throw new Error(`Could not determine the GitHub repository for this session. Open the session in a git checkout with a GitHub origin remote.${hint}`);
+	throw new Error(`Could not determine the GitHub repository for this session. Open the session in a git checkout with a github.com origin remote.${hint}`);
 }
 
 async function remember(repo) {
@@ -1026,7 +1053,7 @@ async function remember(repo) {
 // Keep security settings and default-branch metadata, never the full repository payload.
 async function repoSettings(repo) {
 	try {
-		const { stdout } = await execFileAsync("gh", ["api", `repos/${repo}`, "--jq",
+		const { stdout } = await execFileAsync("gh", ["api", "--hostname", "github.com", `repos/${repo}`, "--jq",
 			". as $repo | (.security_and_analysis // {}) + {default_branch: $repo.default_branch}"], {
 			cwd: session.workspacePath,
 			timeout: 8000,
@@ -1043,7 +1070,7 @@ function ghPages(path, headers = []) {
 	const secrets = /\/secret-scanning\/alerts(?:\?|\/|$)/.test(path);
 	const output = secrets
 		? ["--jq", ".[] | {number, state, secret_type, secret_type_display_name, html_url}"] : ["--slurp"];
-	return execFileAsync("gh", ["api", "--paginate", ...output, path, ...headers], {
+	return execFileAsync("gh", ["api", "--hostname", "github.com", "--paginate", ...output, path, ...headers], {
 		cwd: session.workspacePath,
 		timeout: 12000,
 		maxBuffer: 16 * 1024 * 1024,
@@ -1069,7 +1096,7 @@ async function campaignContext() {
 }
 
 async function campaignApi(method, path, body) {
-	const args = ["api", "--method", method, path, "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2026-03-10"];
+	const args = ["api", "--hostname", "github.com", "--method", method, path, "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2026-03-10"];
 	let payload;
 	try {
 		if (body) {
@@ -1351,7 +1378,10 @@ try {
 	}
 	world.localFixes = restored;
 } catch (error) {
-	if (error.code !== "ENOENT") session.log(`Could not restore dedicated fix sessions: ${error.message}`, { level: "error" });
+	if (error.code !== "ENOENT") {
+		session.log(`Could not restore dedicated fix sessions: ${error.message}`, { level: "error" });
+		throw new Error(`Cannot safely restore dedicated fix sessions: ${error.message}. Inspect the saved ledger before reloading.`);
+	}
 }
 const localFixLauncher = createLocalFixLauncher({
 	records: world.localFixes,

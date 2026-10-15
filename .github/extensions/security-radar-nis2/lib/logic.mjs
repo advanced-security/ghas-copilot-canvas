@@ -584,7 +584,7 @@ export const REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/;
 // "owner/name" from an https, ssh or scp-style git remote URL; null when it does not look like one.
 export function parseRemoteRepo(url) {
 	if (typeof url !== "string") return null;
-	const match = url.trim().match(/^(?:[\w+.-]+:\/\/(?:[^@/]+@)?[^/]+\/|[^@\s/]+@[^:\s/]+:)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/);
+	const match = url.trim().match(/^(?:(?:https|ssh):\/\/(?:[^@/]+@)?github\.com\/|[^@\s/]+@github\.com:)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
 	const repo = match ? `${match[1]}/${match[2]}` : null;
 	return repo && REPO_PATTERN.test(repo) ? repo : null;
 }
@@ -875,17 +875,16 @@ const RADAR_TASK = {
 
 // Free-form radar questions that ask for an actual change switch the panel to an editing prompt.
 // Both code and Git changes must read as requests, not informational questions.
-const GIT_INTENT = /\b(branch|branche|commit|push|pr|pull request)\b/i;
-const FIX_VERB = /\b(fix|patch|apply|implement|edit|modify|remediate|corrige\w*|répare\w*|modifie\w*|applique\w*|implémente\w*)/i;
-const REQUEST = /(^\s*(fix|patch|apply|implement|edit|modify|remediate|corrige|répare|modifie|applique|implémente|go|commit|push|create|open|make|crée|ouvre)\b)|\b(can you|could you|please|go ahead|do it|let'?s|peux[- ]tu|tu peux|pourrais[- ]tu|vas[- ]y|fais|stp|s'il te pla[iî]t)\b/i;
+const FIX_REQUEST = /^(?:(?:can you|could you|please|go ahead(?: and)?|let'?s|peux[- ]tu|tu peux|pourrais[- ]tu|vas[- ]y|stp)\s+)*(?:fix|patch|apply|implement|edit|modify|remediate|corrige\w*|répare\w*|modifie\w*|applique\w*|implémente\w*)\b/i;
 const GIT_ACTION = /^(?:(?:can you|could you|please|go ahead(?: and)?|let'?s|peux[- ]tu|tu peux|pourrais[- ]tu|vas[- ]y|stp)\s+)*(?:(?:commit|push)\b|(?:create|open|make|crée|ouvre)\b.*\b(?:branch|branche|pr|pull request)\b)/i;
 const READ_ONLY_QUESTION = /^(?:please\s+)?(?:which|what|where|when|why|how|does|is|are|explain|describe|tell|show|can you (?:explain|describe|tell|show)|could you (?:explain|describe|tell|show)|peux[- ]tu (?:expliquer|décrire|dire|montrer))\b/i;
+const NON_AFFIRMATIVE = /\b(don['’]?t|do not|not|never|no|avoid|without|only|just|maybe|perhaps|might|should|if|unless|pas|jamais|sans|seulement|uniquement|peut[- ]être)\b/i;
 
 export function wantsChange(question = "") {
 	const text = String(question).trim();
 	if (!text) return false;
-	if (READ_ONLY_QUESTION.test(text)) return false;
-	return REQUEST.test(text) && (FIX_VERB.test(text) || (GIT_INTENT.test(text) && GIT_ACTION.test(text)));
+	if (READ_ONLY_QUESTION.test(text) || NON_AFFIRMATIVE.test(text)) return false;
+	return FIX_REQUEST.test(text) || GIT_ACTION.test(text);
 }
 
 function branchSlug(finding) {

@@ -31,11 +31,12 @@ Two Copilot canvases that turn the **open GitHub Advanced Security alerts of the
 ## Data and state
 
 - On first open the canvases are empty ("No data yet") and sync from GitHub automatically. Use `refresh` to sync again.
-- The repository is resolved from the session checkout with `gh repo view`, falling back to the `origin` remote.
+- The repository is resolved from the session checkout with `gh repo view`, falling back to the `origin` remote. Only `github.com` repositories are supported: both resolution paths verify the host, and API calls explicitly target it.
 - A GitHub sync is cached per repository under `~/.copilot/extensions/security-radar-nis2/artifacts/` (or `$COPILOT_HOME`) and only used when it matches the current repository.
 - Each repository has its own `radar-cache-<encoded-owner%2Frepo>.json`; the legacy shared cache is not restored. Changing repository identity clears alert data, evidence settings and panel selections before loading the new repository. Unconfirmed campaign and fix-session receipts are preserved; fix links from other repositories are not displayed.
 - Cached security metadata is owner-readable only. Containment annotations are saved separately per repository; legacy unscoped annotations are ignored. Annotations do not close GitHub alerts, remove campaign scope or change posture scores.
-- Copilot panel questions share one chat session: wait for an answer before asking in either canvas. Read-only questions about branches, commits or pull requests do not launch fix sessions.
+- Copilot panel questions share one chat session: wait for an answer before asking in either canvas. Assignments are serialized across both canvases and cannot overlap an alert refresh, including repository resolution. Read-only, negated or ambiguous free-form requests do not launch fix sessions; use **Fix locally** for explicit execution.
+- If an existing fix-session ledger cannot be read or validated, extension initialization fails rather than launching without its deduplication records. Inspect the saved ledger before reloading; do not discard unconfirmed launch receipts.
 - Canvas HTTP routes require a per-instance capability URL and the exact loopback Host. Foreign Origins are rejected; actions require same-origin JSON. State and event streams use the same capability.
 - Secret-scanning pagination projects only alert number, state, type, display name and URL inside `gh`, before stdout reaches Node. Cached metadata, posture briefs and fix-session ledgers use owner-only permissions (`0600`).
 - If an alert type is not enabled (HTTP 403/404), it counts as empty; the sync only fails if all three are unavailable.

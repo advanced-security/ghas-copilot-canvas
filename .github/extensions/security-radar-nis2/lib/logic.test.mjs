@@ -710,7 +710,12 @@ test("remote URLs resolve to owner/name", () => {
 	assert.equal(parseRemoteRepo("https://github.com/acme/widgets/"), "acme/widgets");
 	assert.equal(parseRemoteRepo("https://user@github.com/acme/widgets"), "acme/widgets");
 	assert.equal(parseRemoteRepo("git@github.com:acme/widgets.git"), "acme/widgets");
-	assert.equal(parseRemoteRepo("ssh://git@github.example.com/acme/my.repo.git\n"), "acme/my.repo");
+	assert.equal(parseRemoteRepo("ssh://git@github.com/acme/my.repo.git\n"), "acme/my.repo");
+	for (const remote of ["https://gitlab.com/acme/widgets.git", "git@gitlab.com:acme/widgets.git",
+		"ssh://git@github.example.com/acme/widgets.git", "https://github.com.evil.test/acme/widgets.git",
+		"https://github.com@evil.test/acme/widgets.git", "https://evil.test/github.com/acme/widgets.git"]) {
+		assert.equal(parseRemoteRepo(remote), null, remote);
+	}
 	assert.equal(parseRemoteRepo("not a url"), null);
 	assert.equal(parseRemoteRepo("https://github.com/acme"), null);
 	assert.equal(parseRemoteRepo(""), null);
@@ -806,6 +811,11 @@ test("radar free-form requests to change code get an editing prompt on a neutral
 		"Is there a PR for this?", "Can you explain how to fix this in a branch?",
 		"Please explain this commit", "Please review this PR", "Could you show the branch?",
 		"Peux-tu expliquer ce commit ?", "Quelle branche contient cette alerte ?",
+		"Please don't fix this; just explain the risk", "Please do not fix this",
+		"Don't push this branch", "Could you avoid modifying this?",
+		"Ne corrige pas ça, explique le risque", "Tu peux expliquer sans modifier ?",
+		"Please discuss whether we should fix this", "Please consider a fix",
+		"Maybe fix this", "Fix this if it is safe", "Please only explain the fix",
 	]) {
 		assert.equal(wantsChange(q), false, q);
 	}

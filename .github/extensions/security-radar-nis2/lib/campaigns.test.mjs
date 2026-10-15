@@ -301,6 +301,26 @@ test("unknown publication can only be released by explicit user verification, wh
 	assert.equal(denied.data.draft.status, "draft");
 });
 
+test("absence acknowledgment targets the unknown retry receipt rather than the earlier failed publication", async () => {
+	let attempts = 0;
+	const h = harness({ api: async () => {
+		throw new Error(++attempts === 1 ? "GitHub HTTP 403" : "timeout");
+	} });
+	const d = await prepared(h);
+	const input = { id: d.id, revision: d.revision, confirm: true };
+	await assert.rejects(h.service.publish(input), /rejected publication/);
+	assert.equal(h.data.receipts[0].status, "failed");
+	await assert.rejects(h.service.publish(input), /could not be confirmed/);
+	assert.deepEqual(h.data.receipts.map((receipt) => [receipt.id, receipt.status]), [[d.id, "failed"], [d.id, "unknown"]]);
+	assert.equal(h.service.state().publicationBlocked, true);
+	await assert.rejects(h.service.acknowledgeAbsent({ id: d.id, confirm: false }), /Explicitly confirm/);
+	await h.service.acknowledgeAbsent({ id: d.id, confirm: true });
+	assert.deepEqual(h.data.receipts.map((receipt) => receipt.status), ["failed", "abandoned"]);
+	assert.equal(h.service.state().publicationBlocked, false);
+	assert.equal(attempts, 2, "acknowledgment must not retry publication");
+	await assert.rejects(h.service.acknowledgeAbsent({ id: d.id, confirm: true }), /Explicitly confirm/);
+});
+
 test("persistence failures prevent POST or preserve intent for reconciliation after accepted POST", async () => {
 	let rejectSaving = false;
 	let calls = 0;
