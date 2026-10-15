@@ -113,6 +113,69 @@ test("recorded launch is not downgraded by a stale timeout", async () => {
 	assert.equal(f.records[job.id].status, "launched");
 });
 
+test("confirmed session receipt survives a later delivery rejection", async () => {
+	const gate = Promise.withResolvers();
+	const f = fixture(() => gate.promise);
+	const launching = f.launcher.launch(job);
+	while (!f.messages.length) await Promise.resolve();
+	await f.launcher.recordSession(job.canvasId, receipt);
+	gate.reject(new Error("late transport failure"));
+	const record = await launching;
+	assert.equal(record.status, "launched");
+	assert.equal(record.appUrl, receipt.appUrl);
+	assert.equal(record.error, null);
+	assert.equal(f.messages.length, 1);
+	assert.deepEqual(f.counts(), { saved: 2, updates: 2 });
+});
+
+test("a released request's late delivery rejection cannot change a newer launch", async () => {
+	const gate = Promise.withResolvers();
+	let calls = 0;
+	const f = fixture(() => ++calls === 1 ? gate.promise : Promise.resolve());
+	const old = f.launcher.launch(job);
+	while (!f.messages.length) await Promise.resolve();
+	f.timers[0]();
+	await f.launcher.acknowledgeAbsent({ id: job.id, requestId: job.requestId, confirm: true });
+	const next = await f.launcher.launch({ ...job, requestId: "new-request" });
+	const before = f.counts();
+	gate.reject(new Error("old send failed"));
+	await old;
+	assert.deepEqual(f.counts(), before);
+	assert.equal(f.records[job.id], next);
+	assert.equal(next.status, "launching");
+	await f.launcher.recordSession(job.canvasId, { ...receipt, requestId: next.requestId });
+});
+
+test("only explicit absence confirmation releases the exact unknown launch and never retries", async () => {
+	const f = fixture();
+	await f.launcher.launch(job);
+	await assert.rejects(f.launcher.acknowledgeAbsent({ ...receipt, confirm: true }), /Explicitly confirm/);
+	f.timers[0]();
+	for (const input of [{ id: job.id, requestId: job.requestId }, { id: job.id, requestId: "stale", confirm: true }]) {
+		await assert.rejects(f.launcher.acknowledgeAbsent(input), /Explicitly confirm/);
+	}
+	const released = await f.launcher.acknowledgeAbsent({ id: job.id, requestId: job.requestId, confirm: true });
+	assert.deepEqual(released, { id: job.id, released: true });
+	assert.deepEqual(f.records, {});
+	assert.equal(f.messages.length, 1);
+	await assert.rejects(f.launcher.recordSession(job.canvasId, receipt), /matching/);
+	const next = await f.launcher.launch({ ...job, requestId: "new-request" });
+	assert.equal(next.requestId, "new-request");
+	assert.equal(f.messages.length, 2);
+	await f.launcher.recordSession(job.canvasId, { ...receipt, requestId: "new-request" });
+});
+
+test("failed absence persistence restores the protected launch receipt", async () => {
+	const records = { [job.id]: { ...job, status: "unknown" } };
+	const launcher = createLocalFixLauncher({
+		records, send() { assert.fail("must not retry"); }, broadcast() {}, log() {},
+		persist: async () => { throw new Error("disk full"); },
+	});
+	await assert.rejects(launcher.acknowledgeAbsent({ id: job.id, requestId: job.requestId, confirm: true }), /disk full/);
+	assert.equal(records[job.id].status, "unknown");
+	assert.equal(records[job.id].requestId, job.requestId);
+});
+
 test("reset persists an empty launch ledger and permits a fresh session", async () => {
 	const f = fixture();
 	await f.launcher.launch(job);

@@ -4,6 +4,10 @@ export const CAMPAIGN_LIMIT = 1000;
 export const CAMPAIGN_REFRESH_MS = 5 * 60 * 1000;
 const TYPES = { code: "code-scanning", secrets: "secret-scanning" };
 
+export function isGitHubLogin(value) {
+	return typeof value === "string" && /^[a-z\d](?:[a-z\d_-]{0,37}[a-z\d])?$/i.test(value);
+}
+
 export function scheduleCampaignProgress(service, { canRefresh, onError, schedule = setInterval, cancel = clearInterval }) {
 	const timer = schedule(async () => {
 		if (!canRefresh() || service.busy || !service.state().receipts.some((receipt) => receipt.status === "published")) return;
@@ -47,7 +51,7 @@ export function campaignFields(input, now = Date.now()) {
 	const endsAt = `${input.dueDate}T23:59:59Z`;
 	if (!Number.isFinite(Date.parse(endsAt)) || new Date(endsAt).toISOString().slice(0, 10) !== input.dueDate ||
 		Date.parse(endsAt) <= now) throw new Error("Choose a valid future due date.");
-	if (typeof input.manager !== "string" || !/^[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?$/i.test(input.manager)) {
+	if (!isGitHubLogin(input.manager)) {
 		throw new Error("Provide one campaign manager's GitHub login (organization owner or security manager).");
 	}
 	return { name: input.name.trim(), description: input.description.trim(), dueDate: input.dueDate, manager: input.manager, endsAt };

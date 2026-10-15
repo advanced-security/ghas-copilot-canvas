@@ -484,7 +484,10 @@ function localFixHtml(record) {
   if (!record) return "";
   if (record.status === "launched") return '<p class="status"><a class="suggest key" href="' + esc(record.appUrl) + '">Open dedicated fix session ↗</a> Implementation runs in its own worktree; this checkout is unchanged.</p>';
   if (record.status === "launching") return '<p class="status">Creating a dedicated fix session… This canvas stays open.</p>';
-  return '<p class="status" role="alert">' + esc(record.error || "Session launch could not be confirmed. Check the session sidebar.") + "</p>";
+  return '<p class="status" role="alert">' + esc(record.error || "Session launch could not be confirmed. Check the session sidebar.") + "</p>" +
+    (record.status === "unknown" ? '<label class="campaign-confirm"><input type="checkbox" data-fix-absent="' + esc(record.id) +
+      '" /> I checked the session list: no dedicated fix session was created.</label><button class="ghost" data-act="acknowledge_fix_session_absent" data-id="' +
+      esc(record.id) + '" data-request="' + esc(record.requestId) + '" disabled>Release unconfirmed fix receipt</button>' : "");
 }
 function resetButton(s) {
   return '<button class="ghost" data-act="reset_demo"' + (s.resetBlocked ? " disabled" : "") +
@@ -774,6 +777,13 @@ function draw() {
         input.confirm = true;
         el.disabled = true;
       }
+      if (el.dataset.act === "acknowledge_fix_session_absent") {
+        const check = root.querySelector('[data-fix-absent="' + el.dataset.id + '"]');
+        if (!check || !check.checked) return;
+        input.confirm = true;
+        input.requestId = el.dataset.request;
+        el.disabled = true;
+      }
       let field = null;
       let typed = "";
       if (el.dataset.q) input.question = el.dataset.q;
@@ -820,6 +830,12 @@ function draw() {
     el.addEventListener("change", () => {
       const release = root.querySelector('[data-act="acknowledge_campaign_absent"][data-id="' + el.dataset.campaignAbsent + '"]');
       if (release) release.disabled = !el.checked || state.campaigns.busy || state.refreshing;
+    });
+  });
+  root.querySelectorAll("[data-fix-absent]").forEach((el) => {
+    el.addEventListener("change", () => {
+      const release = root.querySelector('[data-act="acknowledge_fix_session_absent"][data-id="' + el.dataset.fixAbsent + '"]');
+      if (release) release.disabled = !el.checked || state.refreshing;
     });
   });
   if (typeof bindRadarTooltips === "function") bindRadarTooltips(root);

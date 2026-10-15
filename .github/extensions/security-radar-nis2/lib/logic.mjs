@@ -177,6 +177,8 @@ export function buildLiveFindings({ code = [], dependabot = [], secrets = [], de
 			packages: rest.length,
 			packageNames: rest.map((pkg) => pkg.rule.split("/").slice(1).join("/")),
 			postureDeduction: rest.reduce((sum, pkg) => sum + deduction(pkg), 0),
+			lowerSeverityDeduction: rest.filter((pkg) => SEVERITY_RANK[pkg.severity] < SEVERITY_RANK.high)
+				.reduce((sum, pkg) => sum + deduction(pkg), 0),
 			bySeverity,
 			controlIds: ["supply"],
 			remediation: remediationFor("dependabot", { rollup: true }),
@@ -578,9 +580,10 @@ export function scoreControl(control, findings, containedIds, evidence = {}) {
 	return clamp(20 - lost - gaps * GAP_PENALTY, 0, 20);
 }
 
-/** Every critical or high finding group, from any source: what the "once critical & high are fixed" projection closes. */
+/** Groups fully closed by the critical/high scenario; mixed dependency rollups retain lower-severity packages. */
 export function criticalHighIds(findings = []) {
-	return findings.filter((finding) => SEV_ORDER[finding.severity] >= SEV_ORDER.high).map((finding) => finding.id);
+	return findings.filter((finding) => SEV_ORDER[finding.severity] >= SEV_ORDER.high
+		&& !(finding.id === "dep-rest" && finding.lowerSeverityDeduction > 0)).map((finding) => finding.id);
 }
 
 export const REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/;
@@ -612,6 +615,7 @@ function slimFinding(finding, repo) {
 		source: finding.source,
 		severity: finding.severity,
 		count: finding.count,
+		...(finding.packageNames ? { packageNames: finding.packageNames } : {}),
 		where: finding.line ? `${finding.path}:${finding.line}` : finding.path,
 		url: alertUrl(finding, repo),
 		copilot: finding.copilot ?? null,
@@ -622,6 +626,8 @@ export function complianceModel(containedIds = [], findings = [], options = {}) 
 	const { totals = EMPTY_TOTALS, evidence = {}, evidenceSource = {}, repo = null } = options;
 	const contained = asSet(containedIds);
 	const fixed = new Set([...contained, ...criticalHighIds(findings)]);
+	const projectedFindings = findings.map((finding) => finding.id === "dep-rest" && finding.lowerSeverityDeduction != null
+		? { ...finding, postureDeduction: finding.lowerSeverityDeduction } : finding);
 	const controls = CONTROLS.map((control) => {
 		const open = openFor(control, findings, contained).sort(
 			(a, b) => SEV_ORDER[b.severity] - SEV_ORDER[a.severity] || b.count - a.count || a.id.localeCompare(b.id),
@@ -635,7 +641,7 @@ export function complianceModel(containedIds = [], findings = [], options = {}) 
 			...control,
 			framework: `NIS2 ${control.nis2.join(", ")} · DORA ${control.dora.join(", ")}`,
 			score: scoreControl(control, findings, contained, evidence),
-			projectedScore: scoreControl(control, findings, fixed, evidence),
+			projectedScore: scoreControl(control, projectedFindings, fixed, evidence),
 			scoreDetails: {
 				alertPenalty: open.reduce((sum, finding) => sum + deduction(finding), 0),
 				evidencePenalty: evidenceFor(control, evidence).filter((item) => item.status === false).length * GAP_PENALTY,
@@ -751,7 +757,7 @@ export function compliancePrompt(kind, control, model, question = "") {
 	const task = COMPLIANCE_TASK[kind];
 	if (!task) throw new Error(`unknown compliance prompt ${kind}`);
 	const findings = control.findings.length
-		? control.findings.map((f) => `${f.title} (${f.severity}, ${f.count} alert${f.count === 1 ? "" : "s"}, ${f.where})`).join("; ")
+		? control.findings.map((f) => `${f.title} (${f.severity}, ${f.count} alert${f.count === 1 ? "" : "s"}, ${f.where})${f.packageNames?.length ? `; packages: ${f.packageNames.join(", ")}` : ""}`).join("; ")
 		: "none open";
 	const evidence = control.evidence
 		.map((item) => `${item.label}: ${item.status === true ? "in place" : item.status === false ? "missing" : "unknown"}`)
@@ -786,7 +792,7 @@ export function complianceOfflineAnswer(kind, control) {
 	const missing = control.evidence.filter((item) => item.status === false).map((item) => item.label);
 	const unknown = control.evidence.filter((item) => item.status !== true && item.status !== false).map((item) => item.label);
 	if (kind === "dependencies") return [
-		`- Week 1, application owner: review the selected groups (${control.findings.map((f) => f.title).join(", ")}) in Dependabot; verify available fixes and compatible versions.`,
+		`- Week 1, application owner: review the selected groups (${control.findings.map((f) => f.packageNames?.join(", ") || f.title).join(", ")}) in Dependabot; verify available fixes and compatible versions.`,
 		"- Weeks 2–3, maintainers: review dependency update PRs in compatible batches and run API/frontend CI.",
 		"- Week 4, security owner: refresh the alerts and retain merged PRs plus closed alerts as evidence. This offline checklist verifies no versions or fixes and creates no campaign.",
 	].join("\n");
@@ -879,16 +885,19 @@ const RADAR_TASK = {
 
 // Free-form radar questions that ask for an actual change switch the panel to an editing prompt.
 // Both code and Git changes must read as requests, not informational questions.
-const FIX_REQUEST = /^(?:(?:can you|could you|please|go ahead(?: and)?|let'?s|peux[- ]tu|tu peux|pourrais[- ]tu|vas[- ]y|stp)\s+)*(?:fix|patch|apply|implement|edit|modify|remediate|corrige\w*|répare\w*|modifie\w*|applique\w*|implémente\w*)\b/i;
-const GIT_ACTION = /^(?:(?:can you|could you|please|go ahead(?: and)?|let'?s|peux[- ]tu|tu peux|pourrais[- ]tu|vas[- ]y|stp)\s+)*(?:(?:commit|push)\b|(?:create|open|make|crée|ouvre)\b.*\b(?:branch|branche|pr|pull request)\b)/i;
+const EXECUTION_PREFIX = /^(?:(?:can you|could you|please|go ahead(?: and)?|let'?s|peux[- ]tu|tu peux|pourrais[- ]tu|vas[- ]y|stp)\s+)*/i;
+const FIX_REQUEST = /^(?:(?:fix|patch|remediate)\s+(?:it|this|that|these|those|(?:the|a|an)\s+(?:code|file|workflow|vulnerability|vuln|alert|issue|bug|finding|dependency))\b|(?:apply|implement)\s+(?:(?:the|a|an|this|that)\s+)?(?:fix|patch|remediation|change)\b|(?:edit|modify)\s+(?:(?:the|this|that)\s+)?(?:code|file|workflow|manifest|lockfile)\b|(?:corrige\w*|répare\w*|modifie\w*|applique\w*|implémente\w*)\s+(?:ça|ce|cette|le|la|les|un|une)\b)/i;
+const GIT_ACTION = /^(?:(?:commit|push)\s+(?:it|this|that|these|the|my|our|all|changes)\b|(?:create|make|crée)\s+(?:(?:a|an|the|new|une?|la)\s+)*(?:branch|branche|pr|pull request)(?=\s*(?:$|[?.!]|(?:with|for|to|from|named|called|and)\b))|(?:open|ouvre)\s+(?:a|an|new|une?)\s+(?:new\s+)?(?:pr|pull request)(?=\s*(?:$|[?.!]|(?:with|for|to|from|and)\b)))/i;
+const ADVISORY_REQUEST = /\b(?:recommendations?|descriptions?|lists?|notes?|suggestions?|examples?|explanations?|summar(?:y|ies)|plans?|advice|messages?|templates?)\b/i;
 const READ_ONLY_QUESTION = /^(?:please\s+)?(?:which|what|where|when|why|how|does|is|are|explain|describe|tell|show|can you (?:explain|describe|tell|show)|could you (?:explain|describe|tell|show)|peux[- ]tu (?:expliquer|décrire|dire|montrer))\b/i;
 const NON_AFFIRMATIVE = /\b(don['’]?t|do not|not|never|no|avoid|without|only|just|maybe|perhaps|might|should|if|unless|pas|jamais|sans|seulement|uniquement|peut[- ]être)\b/i;
 
 export function wantsChange(question = "") {
 	const text = String(question).trim();
 	if (!text) return false;
-	if (READ_ONLY_QUESTION.test(text) || NON_AFFIRMATIVE.test(text)) return false;
-	return FIX_REQUEST.test(text) || GIT_ACTION.test(text);
+	if (READ_ONLY_QUESTION.test(text) || NON_AFFIRMATIVE.test(text) || ADVISORY_REQUEST.test(text)) return false;
+	const request = text.replace(EXECUTION_PREFIX, "");
+	return FIX_REQUEST.test(request) || GIT_ACTION.test(request);
 }
 
 function branchSlug(finding) {

@@ -39,7 +39,7 @@ import {
 } from "./lib/logic.mjs";
 import { renderPage } from "./lib/pages.mjs";
 import { createLocalFixLauncher } from "./lib/local-fixes.mjs";
-import { createCampaignService, scheduleCampaignProgress } from "./lib/campaigns.mjs";
+import { createCampaignService, isGitHubLogin, scheduleCampaignProgress } from "./lib/campaigns.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -72,11 +72,13 @@ let campaignService;
 let stopCampaignProgress;
 let activeAsk = null;
 let containmentRepo = null;
+let containmentSave = Promise.resolve();
 let githubOperation = null;
 let radarLayout = { findings: null, seed: null, value: [] };
 const REPOSITORY_ACTIONS = new Set([
 	"request_copilot", "fix_locally", "assign_copilot", "ask_copilot", "explain_finding", "assess_priority",
 	"suggest_fix", "prepare_campaign", "create_campaign", "publish_campaign", "draft_dependency_plan", "generate_brief",
+	"acknowledge_fix_session_absent",
 ]);
 
 function newSeed() {
@@ -143,15 +145,20 @@ async function saveState(contained = containedIds()) {
 		if (!contained.length) return;
 		throw new CanvasError("unknown_repository", "Resolve the current repository before annotating findings.");
 	}
-	const dir = artifactDir();
-	await mkdir(dir, { recursive: true });
 	const path = containmentPath(repo);
-	await writeFile(
-		`${path}.tmp`,
-		JSON.stringify({ repo, contained }, null, 2),
-		{ mode: 0o600 },
-	);
-	await rename(`${path}.tmp`, path);
+	const content = JSON.stringify({ repo, contained }, null, 2);
+	const write = containmentSave.then(async () => {
+		await mkdir(artifactDir(), { recursive: true });
+		const temp = `${path}.${randomUUID()}.tmp`;
+		try {
+			await writeFile(temp, content, { mode: 0o600 });
+			await rename(temp, path);
+		} finally {
+			await rm(temp, { force: true });
+		}
+	});
+	containmentSave = write.catch(() => {});
+	await write;
 }
 
 function containedIds() {
@@ -388,6 +395,15 @@ async function handleActionUnlocked(canvasId, name, input = {}) {
 	if (name === "record_fix_session") {
 		try {
 			return await localFixLauncher.recordSession(canvasId, input);
+		} catch (error) {
+			throw new CanvasError("invalid_fix_session", error.message);
+		}
+	}
+	if (name === "acknowledge_fix_session_absent") {
+		const record = world.localFixes[id];
+		if (!record || record.repo !== world.repo) throw new CanvasError("invalid_fix_session", "Select an unconfirmed fix request from this repository.");
+		try {
+			return await localFixLauncher.acknowledgeAbsent(input);
 		} catch (error) {
 			throw new CanvasError("invalid_fix_session", error.message);
 		}
@@ -1000,7 +1016,7 @@ class FeatureOff {
 // 403/404 answers that mean "this alert type is not enabled here" are not sync failures on their own.
 function featureOff(error) {
 	const text = String(error?.stderr || error?.message || "");
-	if (/\b(403|404)\b/.test(text) && /not enabled|disabled|no analysis found|must be enabled|not found/i.test(text)) return new FeatureOff(error);
+	if (/\b(403|404)\b/.test(text) && /not enabled|disabled|no analysis found|must be enabled/i.test(text)) return new FeatureOff(error);
 	throw error;
 }
 
@@ -1102,7 +1118,7 @@ async function campaignContext() {
 	const metadata = await campaignApi("GET", `repos/${repo}`);
 	if (!Number.isSafeInteger(metadata.id) || typeof metadata.default_branch !== "string") throw new Error("Invalid repository metadata from GitHub.");
 	const user = await campaignApi("GET", "user");
-	if (typeof user.login !== "string" || !/^[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?$/i.test(user.login)) {
+	if (!isGitHubLogin(user.login)) {
 		throw new Error("Could not identify the authenticated gh user for the campaign manager.");
 	}
 	return { repo, repositoryId: metadata.id, branch: metadata.default_branch, organization: metadata.owner?.type === "Organization", manager: user.login };
@@ -1211,6 +1227,10 @@ function defineCanvas(id, displayName, description, actions) {
 		description,
 		inputSchema,
 		actions: [...actions, ...campaignActions(id), action("reset_demo", "Reset shared answers, containment, preview, known campaign tracking and confirmed local session links across both security canvases. Unconfirmed receipts, existing sessions, real GitHub assignments and campaigns on GitHub are preserved."),
+		action("acknowledge_fix_session_absent", "Release one unknown local-fix receipt only after the user checks the session list and explicitly confirms no child session was created. Does not retry or launch a fix.", {
+			requestId: { type: "string", minLength: 1 },
+			confirm: { type: "boolean" },
+		}),
 		action("record_fix_session", "Record the actual dedicated worktree session created for a local fix.", {
 			requestId: { type: "string", minLength: 1 },
 			sessionId: { type: "string", minLength: 1 },

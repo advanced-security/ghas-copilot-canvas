@@ -371,8 +371,50 @@ test("dependency rollups preserve per-package penalties across the top-14 displa
 		assert.equal(rollupProjection.score, complianceModel([], buildLiveFindings({ dependabot: critical })).score);
 		assert.equal(rollupProjection.lift, penalty + 1);
 		assert.equal(rollupProjection.alerts, count + 1);
-		assert.equal(model.projected, complianceModel(criticalHighIds(list), list).score);
+		assert.equal(model.projected, complianceModel([], buildLiveFindings({ dependabot: [low] })).score,
+			"Critical/High preview retains the low package even inside a mixed rollup");
 	}
+});
+
+test("Critical/High preview retains every lower-severity package across mixed rollups and exported advice", () => {
+	for (const highCount of [0, 14, 15, 20]) {
+		const high = Array.from({ length: highCount }, (_, i) => dep(i + 1, `high-${i}`, "high"));
+		const lower = Array.from({ length: 10 }, (_, i) => dep(i + 100, `medium-${i}`, "medium"));
+		lower.push(dep(200, "low-package", "low"));
+		const list = buildLiveFindings({ dependabot: [...high, ...lower] });
+		const evidence = { "dependabot-config": false };
+		const model = complianceModel([], list, { evidence });
+		const refreshed = complianceModel([], buildLiveFindings({ dependabot: lower }), { evidence });
+		assert.equal(model.projected, refreshed.score, `${highCount} High packages`);
+		for (const control of model.controls) {
+			assert.equal(control.projectedScore, refreshed.controls.find((next) => next.id === control.id).score);
+		}
+		const supply = model.controls.find((control) => control.id === "supply");
+		assert.equal(supply.projectedScore, refreshed.controls.find((control) => control.id === "supply").score);
+		assert.match(complianceOfflineAnswer("board", supply), new RegExp(`lifts it to ${supply.projectedScore}/20`));
+		assert.ok(compliancePrompt("board", supply, model).includes(`${supply.projectedScore}/20 once critical and high findings are fixed`));
+		assert.ok(auditBrief(model).includes(`Once critical and high findings are fixed: ${refreshed.score} / 100`));
+		assert.equal(remediationProjection(model.controls, list.map((finding) => finding.id), "dependencies").score,
+			complianceModel([], [], { evidence }).score, "explicit full dependency plan still resolves every selected package");
+	}
+	const high = Array.from({ length: 20 }, (_, i) => dep(i + 1, `high-${i}`, "high"));
+	const medium = Array.from({ length: 10 }, (_, i) => dep(i + 100, `medium-${i}`, "medium"));
+	const model = complianceModel([], buildLiveFindings({ dependabot: [...high, ...medium] }));
+	assert.equal(model.controls.find((control) => control.id === "supply").projectedScore, 10);
+});
+
+test("dependency rollup plans identify constituent packages without tool access", () => {
+	const packages = ["@acme/alpha", "beta"];
+	const list = buildLiveFindings({ dependabot: packages.map((name, i) => dep(i + 1, name, "medium")) });
+	assert.equal(list.length, 1);
+	assert.equal(list[0].id, "dep-rest");
+	const model = complianceModel([], list);
+	const control = model.controls.find((control) => control.id === "supply");
+	for (const name of packages) {
+		assert.ok(compliancePrompt("dependencies", control, model).includes(name));
+		assert.ok(complianceOfflineAnswer("dependencies", control).includes(name));
+	}
+	assert.match(compliancePrompt("dependencies", control, model), /Do not call any tools/);
 });
 
 test("dependency and response-evidence advice is read-only, explicit about its scope, and does not invent fixes", () => {
@@ -876,6 +918,10 @@ test("radar free-form requests to change code get an editing prompt on a neutral
 		"Ne corrige pas ça, explique le risque", "Tu peux expliquer sans modifier ?",
 		"Please discuss whether we should fix this", "Please consider a fix",
 		"Maybe fix this", "Fix this if it is safe", "Please only explain the fix",
+		"Make a branch protection recommendation", "Create a PR description for this alert",
+		"Open the PR list for this rule", "Patch notes for this rule?",
+		"Please create a branch naming recommendation", "Could you make a PR template?",
+		"Can you apply the patch notes?", "Create a PR description and explain the fix",
 	]) {
 		assert.equal(wantsChange(q), false, q);
 	}

@@ -30,6 +30,23 @@ export function createLocalFixLauncher({ records, parentSessionId, send, persist
 		broadcast();
 	}
 	return {
+		async acknowledgeAbsent({ id, requestId, confirm }) {
+			const record = records[id];
+			if (confirm !== true || !record || record.requestId !== requestId || record.status !== "unknown") {
+				throw new Error("Explicitly confirm that you inspected the session list and no dedicated fix session was created for this request.");
+			}
+			delete records[id];
+			try {
+				await changed();
+			} catch (error) {
+				records[id] = record;
+				broadcast();
+				throw error;
+			}
+			if (timers.has(id)) cancel(timers.get(id));
+			timers.delete(id);
+			return { id, released: true };
+		},
 		async reset() {
 			if (Object.values(records).some((record) => record.status === "launching")) {
 				throw new Error("Wait for the dedicated session launch to finish before resetting.");
@@ -77,6 +94,7 @@ export function createLocalFixLauncher({ records, parentSessionId, send, persist
 			try {
 				await send({ prompt: localFixHandoff(job), displayPrompt: `Create dedicated fix session: ${job.title}` });
 			} catch (error) {
+				if (record.status === "launched" || records[job.id] !== record) return record;
 				cancel(timer);
 				timers.delete(job.id);
 				record.status = "unknown";

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CAMPAIGN_REFRESH_MS, campaignFields, campaignScope, createCampaignService, scheduleCampaignProgress } from "./campaigns.mjs";
+import { CAMPAIGN_REFRESH_MS, campaignFields, campaignScope, createCampaignService, isGitHubLogin, scheduleCampaignProgress } from "./campaigns.mjs";
 import { buildLiveFindings, complianceModel, findingId, remediationProjection } from "./logic.mjs";
 import { renderPage } from "./pages.mjs";
 
@@ -55,6 +55,58 @@ async function prepared(h) {
 
 const creationInput = (draft, extra = {}) => ({
 	id: draft.id, revision: draft.revision, ids: ["cs-test"], confirm: true, ...fields, ...extra,
+});
+
+test("campaign login validation accepts managed users and rejects unsafe or oversized inputs", () => {
+	for (const login of ["mona", "mona-cat", "mona-cat_octo", "mona_cat_octo", "a".repeat(39)]) {
+		assert.equal(isGitHubLogin(login), true, login);
+		assert.equal(campaignFields({ ...fields, manager: login }, time).manager, login);
+	}
+	for (const login of ["", "-mona", "mona_", "@mona", "mona user", "mona/other", "a".repeat(40), null]) {
+		assert.equal(isGitHubLogin(login), false, String(login));
+		assert.throws(() => campaignFields({ ...fields, manager: login }, time), /manager/);
+	}
+});
+
+test("managed users can review and create campaigns with the authenticated manager", async () => {
+	const manager = "mona-cat_octo";
+	const h = harness({ context: async () => ({ repo, repositoryId: 42, branch: "main", organization: true, manager }) });
+	const d = await h.service.prepare(groups, "code", "Managed-user campaign");
+	await h.service.review({ id: d.id, ...fields, manager });
+	const reviewed = h.service.state().draft;
+	await h.service.create(creationInput(reviewed));
+	assert.deepEqual(h.requests.find((request) => request.method === "POST").body.managers, [manager]);
+});
+
+test("unknown fix receipts require checked confirmation and exact request identity before release", async () => {
+	const findings = fixtureFindings().map((finding) => ({ ...finding, url: "https://github.com/acme/widgets/security", where: finding.path }));
+	const selected = findings.find((finding) => finding.source === "code-scanning");
+	const select = element({ act: "select", id: selected.id });
+	const release = element({ act: "acknowledge_fix_session_absent", id: selected.id, request: "request-1" });
+	const check = element({ fixAbsent: selected.id });
+	release.disabled = true;
+	const unknown = { id: selected.id, requestId: "request-1", status: "unknown", error: "Delivery could not be confirmed." };
+	const model = { findings, totals: {}, source: "github", threads: {}, campaigns: { draft: null, receipts: [] },
+		localFixes: { [selected.id]: unknown }, resetEpoch: 0, refreshing: false };
+	const r = renderer("attack-surface-radar", model, [select, release], {}, {
+		['[data-fix-absent="' + selected.id + '"]']: check,
+		['[data-act="acknowledge_fix_session_absent"][data-id="' + selected.id + '"]']: release,
+	}, false, { "[data-fix-absent]": [check] });
+	await select.handlers.click();
+	assert.match(r.draws.at(-1), /I checked the session list: no dedicated fix session was created/);
+	await release.handlers.click();
+	assert.equal(r.payloads.length, 0);
+	check.checked = true;
+	check.handlers.change();
+	assert.equal(release.disabled, false);
+	assert.equal(r.payloads.length, 0);
+	await release.handlers.click();
+	assert.deepEqual(r.payloads, [{
+		name: "acknowledge_fix_session_absent", input: { id: selected.id, confirm: true, requestId: "request-1" },
+	}]);
+	r.push({ ...model, localFixes: {} });
+	assert.match(r.draws.at(-1), /data-act="request_copilot"/);
+	assert.doesNotMatch(r.draws.at(-1), /Release unconfirmed fix receipt/);
 });
 
 test("direct creation uses the authenticated manager, saves intent and creates exactly one linked campaign", async () => {

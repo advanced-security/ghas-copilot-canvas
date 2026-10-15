@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import * as nodeModule from "node:module";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
@@ -28,6 +28,9 @@ async function withExtension({ gh, seed, onImportError }, body) {
 	};
 	const hooks = nodeModule.registerHooks({
 		resolve(specifier, context, next) {
+			if (specifier === "node:fs/promises" && context.parentURL?.includes("/extension.mjs")) {
+				return { url: "test:fs-promises", shortCircuit: true };
+			}
 			if (specifier === "./lib/logic.mjs" && context.parentURL?.includes("/extension.mjs")) {
 				return { url: "test:logic", shortCircuit: true };
 			}
@@ -37,6 +40,12 @@ async function withExtension({ gh, seed, onImportError }, body) {
 			return next(specifier, context);
 		},
 		load(url, context, next) {
+			if (url === "test:fs-promises") return {
+				format: "module", shortCircuit: true,
+				source: `export * from "node:fs/promises";
+					import { rename as original } from "node:fs/promises";
+					export async function rename(...args) { await globalThis.canvasTestBeforeRename(...args); return original(...args); }`,
+			};
 			if (url === "test:logic") return {
 				format: "module", shortCircuit: true,
 				source: `export * from ${JSON.stringify(new URL("./logic.mjs", import.meta.url).href)};
@@ -67,6 +76,7 @@ async function withExtension({ gh, seed, onImportError }, body) {
 	});
 	const ctx = { gh, home, sent, handlers, opens: [], progressTicks, layoutCalls: 0 };
 	globalThis.canvasTestLayout = () => { ctx.layoutCalls++; };
+	globalThis.canvasTestBeforeRename = (...args) => ctx.beforeRename?.(...args);
 	globalThis.canvasTestExecFile = (...args) => ctx.gh(...args);
 	globalThis.canvasTestSession = {
 		sessionId: "test-parent",
@@ -124,6 +134,7 @@ async function withExtension({ gh, seed, onImportError }, body) {
 		delete globalThis.canvasTestExecFile;
 		delete globalThis.canvasTestRehydrate;
 		delete globalThis.canvasTestLayout;
+		delete globalThis.canvasTestBeforeRename;
 		globalThis.setInterval = previousSetInterval;
 		if (previousHome === undefined) delete process.env.COPILOT_HOME;
 		else process.env.COPILOT_HOME = previousHome;
@@ -968,6 +979,127 @@ test("alert types that are switched off count as empty, but an all-disabled repo
 		const state = await settled(h, (current) => current.refreshError);
 		assert.equal(state.source, "none");
 		assert.match(state.refreshError, /Could not sync from GitHub: alerts are not available/);
+	});
+});
+
+test("generic alert 404s fail the sync rather than exporting inaccessible sources as verified zero", { skip }, async () => {
+	for (const warm of [false, true]) {
+		await withExtension({ gh: githubMock() }, async (h) => {
+			await synced(h);
+			if (!warm) {
+				// A new import with no cached payload exercises a first incomplete sync.
+				await rm(join(h.home, ARTIFACTS, "radar-cache-acme%2Fwidgets.json"));
+			}
+			const live = githubMock();
+			h.gh = async (command, args, options) => {
+				if (args.some((arg) => arg.includes("/secret-scanning/alerts"))) throw new Error("gh: Not Found (HTTP 404)");
+				return live(command, args, options);
+			};
+			if (!warm) await import(`../extension.mjs?unavailable-${++importSeq}`);
+			const canvas = warm ? h.canvases[0] : globalThis.canvasTestConfig.canvases[0];
+			const invoke = (name, input = {}) => canvas.actions.find((action) => action.name === name).handler({ canvasId: canvas.id, input });
+			if (warm) await invoke("refresh");
+			await h.waitFor(async () => {
+				const state = await invoke("get_state");
+				return !state.refreshing && state.refreshError;
+			});
+			const state = await invoke("get_state");
+			assert.notEqual(state.source, "github");
+			assert.match(state.refreshError, /alerts are not available/);
+			if (warm) {
+				assert.equal(state.source, "cache");
+				assert.equal(state.totals.secretScanning, 1, "retain the last known secret count");
+			} else {
+				assert.equal(state.source, "none");
+				assert.deepEqual(state.findings, []);
+			}
+			await assert.rejects(invoke("prepare_campaign", { ids: [campaignId(0)], kind: "code" }), /live GitHub|Cached alerts/);
+		});
+	}
+});
+
+test("overlapping containment mutations serialize unique atomic snapshots in request order", { skip }, async () => {
+	await withExtension({ gh: githubMock() }, async (h) => {
+		await synced(h);
+		const firstGate = Promise.withResolvers();
+		const paths = [];
+		let entered = false;
+		h.beforeRename = async (from, to) => {
+			if (!to.endsWith("state-acme%2Fwidgets.json")) return;
+			paths.push(from);
+			if (paths.length === 1) { entered = true; await firstGate.promise; }
+		};
+		const first = h.invoke("attack-surface-radar", "contain_finding", { id: campaignId(0) });
+		await h.waitFor(() => entered);
+		const second = h.invoke("attack-surface-radar", "contain_finding", { id: campaignId(1) });
+		const reset = h.invoke("attack-surface-radar", "reset_contains", {});
+		const last = h.invoke("attack-surface-radar", "contain_finding", { id: campaignId(2) });
+		try {
+			assert.equal(paths.length, 1, "only one containment rename may enter at a time");
+		} finally {
+			firstGate.resolve();
+			await Promise.all([first, second, reset, last]);
+		}
+		assert.equal(paths.length, 4);
+		assert.equal(new Set(paths).size, 4);
+		assert.deepEqual((await readdir(join(h.home, ARTIFACTS))).filter((name) => name.endsWith(".tmp")), []);
+		const saved = JSON.parse(await readFile(join(h.home, ARTIFACTS, "state-acme%2Fwidgets.json"), "utf8"));
+		assert.deepEqual(saved.contained, [campaignId(2)]);
+		assert.deepEqual((await h.invoke("attack-surface-radar", "get_state", {})).findings.filter((finding) => finding.contained).map((finding) => finding.id), saved.contained);
+	});
+});
+
+test("campaign context accepts a managed user and passes it through preparation and review", { skip }, async () => {
+	await withExtension({ gh: githubMock({ handlers: async (args) => {
+		if (args.includes("user")) return { stdout: JSON.stringify({ login: "mona-cat_octo" }) };
+	} }) }, async (h) => {
+		await synced(h);
+		const draft = await h.invoke("attack-surface-radar", "prepare_campaign", { ids: [campaignId(0)], kind: "code" });
+		assert.equal(draft.manager, "mona-cat_octo");
+		const reviewed = await h.invoke("attack-surface-radar", "review_campaign", {
+			id: draft.id, name: "Managed users", description: "Fix selected alerts", dueDate: "2099-01-01", manager: draft.manager,
+		});
+		assert.equal(reviewed.manager, "mona-cat_octo");
+	});
+});
+
+test("unknown fix recovery requires exact confirmation, persists release and never launches automatically", { skip }, async () => {
+	const id = campaignId(0);
+	await withExtension({ gh: githubMock(), seed: async (dir) => {
+		await mkdir(dir, { recursive: true });
+		await writeFile(join(dir, "local-fixes-test-parent.json"), JSON.stringify({
+			[id]: { id, requestId: "old", repo: "acme/widgets", canvasId: "attack-surface-radar", status: "unknown" },
+		}));
+	} }, async (h) => {
+		await synced(h);
+		for (const input of [{ id, requestId: "old" }, { id, requestId: "wrong", confirm: true }]) {
+			await assert.rejects(h.invoke("attack-surface-radar", "acknowledge_fix_session_absent", input), /Explicitly confirm/);
+		}
+		assert.equal((await h.invoke("attack-surface-radar", "get_state", {})).localFixes[id].status, "unknown");
+		await h.invoke("attack-surface-radar", "acknowledge_fix_session_absent", { id, requestId: "old", confirm: true });
+		assert.deepEqual(JSON.parse(await readFile(join(h.home, ARTIFACTS, "local-fixes-test-parent.json"), "utf8")), {});
+		assert.deepEqual((await h.invoke("attack-surface-radar", "get_state", {})).localFixes, {});
+		assert.equal(h.sent.length, 0);
+		const next = await h.invoke("attack-surface-radar", "request_copilot", { id });
+		assert.notEqual(next.requestId, "old");
+		assert.equal(h.sent.length, 1);
+		await h.invoke("attack-surface-radar", "record_fix_session", { id, requestId: next.requestId, sessionId: "new-child", appUrl: "ghapp://sessions/new-child" });
+	});
+});
+
+test("absence confirmation cannot release an unconfirmed fix from another repository", { skip }, async () => {
+	const id = campaignId(0);
+	await withExtension({ gh: githubMock(), seed: async (dir) => {
+		await mkdir(dir, { recursive: true });
+		await writeFile(join(dir, "local-fixes-test-parent.json"), JSON.stringify({
+			[id]: { id, requestId: "old", repo: "other/project", canvasId: "attack-surface-radar", status: "unknown" },
+		}));
+	} }, async (h) => {
+		await synced(h);
+		await assert.rejects(h.invoke("compliance-scoreboard", "acknowledge_fix_session_absent", { id, requestId: "old", confirm: true }), /this repository/);
+		const saved = JSON.parse(await readFile(join(h.home, ARTIFACTS, "local-fixes-test-parent.json"), "utf8"));
+		assert.equal(saved[id].repo, "other/project");
+		assert.equal(h.sent.length, 0);
 	});
 });
 
