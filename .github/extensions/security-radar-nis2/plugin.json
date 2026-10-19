@@ -1,0 +1,20 @@
+{
+  "name": "security-radar-nis2",
+  "description": "Attack surface radar for GHAS alerts and an illustrative NIS2 / DORA posture score, with Copilot-assisted triage, fixes and remediation campaigns.",
+  "version": "0.1.0",
+  "author": {
+    "name": "GitHub Advanced Security"
+  },
+  "repository": "https://github.com/advanced-security/ghas-copilot-canvas",
+  "license": "MIT",
+  "keywords": [
+    "code-scanning",
+    "dependabot",
+    "secret-scanning",
+    "nis2",
+    "dora",
+    "compliance",
+    "canvas"
+  ],
+  "extensions": "."
+}

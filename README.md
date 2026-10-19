@@ -156,6 +156,21 @@ The canvas lets you:
 
 ---
 
+### 5. 🎯 Security Radar & NIS2 / DORA Posture
+
+> `.github/extensions/security-radar-nis2/`
+
+Two complementary canvases that turn the **open GHAS alerts of the current repository** (code scanning, Dependabot, secret scanning) into something you can read at a glance and act on. Alert metadata is read through `gh api`; secret values are never loaded.
+
+#### TL;DR
+
+- **Attack surface radar** (`attack-surface-radar`) — a live radar where every blip is a group of alerts (one per code scanning rule, secret type or vulnerable package), placed on rings by severity. Pick a blip to have Copilot **explain** it, **assess its priority** (read-only, advisory), **suggest a fix** or answer a free-form question; then **fix it locally** in a dedicated Copilot App worktree session, or **assign** a code scanning alert to Copilot Autofix.
+- **NIS2 / DORA posture** (`compliance-scoreboard`) — an *illustrative* score built from the same alerts plus repository evidence (CodeQL workflow, `SECURITY.md`, Dependabot config and security updates, push protection, validity checks, `CODEOWNERS`, incident runbook). Findings are mapped to five control themes (vulnerability handling, supply chain, secrets and access, secure change control, incident-response evidence). Preview the projected score once top findings are fixed, ask Copilot for a 30-day plan, board summary or auditor evidence checklist, generate a posture brief, and create and track code scanning campaigns. For secret alerts, it only prepares the scope and links to GitHub; secret campaigns are not created or tracked. It is **not a legal assessment**.
+
+See the [extension README](.github/extensions/security-radar-nis2/README.md) for details, actions and requirements.
+
+---
+
 ## Prerequisites
 
 All extensions require:
@@ -185,6 +200,7 @@ copilot plugin install codeql-config-builder@ghas-copilot-canvas
 copilot plugin install sbom-dependency-audit@ghas-copilot-canvas
 copilot plugin install ghsp-custom-pattern-deployment@ghas-copilot-canvas
 copilot plugin install code-quality-enablement@ghas-copilot-canvas
+copilot plugin install security-radar-nis2@ghas-copilot-canvas
 ```
 
 In the GitHub Copilot app, open **Customize** → **Plugins**, add
@@ -206,7 +222,7 @@ cd ghas-copilot-canvas
 # open a Copilot CLI session in this directory
 ```
 
-All four canvases will be available immediately.
+All canvases will be available immediately.
 
 ---
 
@@ -237,14 +253,19 @@ All four canvases will be available immediately.
 │   ├── app.js               # Frontend logic
 │   ├── js-yaml.mjs          # Vendored YAML parser
 │   └── README.md
-└── code-quality-enablement/
+├── code-quality-enablement/
+│   ├── plugin.json          # Independently installable plugin manifest
+│   ├── extension.mjs        # Canvas + loopback HTTP server / bulk job orchestration
+│   ├── diagnostics.mjs      # gh api call log tail for the diagnostics panel
+│   └── public/
+│       ├── index.html       # Iframe UI
+│       ├── app.js
+│       └── styles.css
+└── security-radar-nis2/
     ├── plugin.json          # Independently installable plugin manifest
-    ├── extension.mjs        # Canvas + loopback HTTP server / bulk job orchestration
-    ├── diagnostics.mjs      # gh api call log tail for the diagnostics panel
-    └── public/
-        ├── index.html       # Iframe UI
-        ├── app.js
-        └── styles.css
+    ├── extension.mjs        # Radar + NIS2 / DORA canvases, loopback HTTP server
+    ├── README.md
+    └── lib/                 # Model, page rendering, campaigns, local-fix launcher + tests
 
 .github/plugin/
 └── marketplace.json         # Catalog for installing each canvas separately
